@@ -48,6 +48,22 @@ function sortTicketsBySerialDesc(tickets) {
   return [...(tickets || [])].sort((a, b) => Number(b.serialNumber || 0) - Number(a.serialNumber || 0));
 }
 
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function toSafeNumber(value, fallback = 0) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : fallback;
+}
+
+function normalizeWallet(wallet) {
+  return {
+    ...(wallet && typeof wallet === "object" ? wallet : {}),
+    balance: toSafeNumber(wallet?.balance, 0)
+  };
+}
+
 export default function App() {
   const defaultLang = (localStorage.getItem("lang") || "ru").toLowerCase();
   const [lang, setLang] = useState(defaultLang === "en" ? "en" : "ru");
@@ -71,7 +87,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("draws");
 
   const [draws, setDraws] = useState([]);
-  const [wallet, setWallet] = useState({ balance: 0 });
+  const [wallet, setWallet] = useState(normalizeWallet({ balance: 0 }));
   const [transactions, setTransactions] = useState([]);
   const [tickets, setTickets] = useState([]);
   const [notifications, setNotifications] = useState([]);
@@ -79,6 +95,7 @@ export default function App() {
   const [purchaseReceipt, setPurchaseReceipt] = useState(null);
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [showInsufficientToast, setShowInsufficientToast] = useState(false);
+  const [drawCreateToastMessage, setDrawCreateToastMessage] = useState("");
 
   const [authForm, setAuthForm] = useState({ email: "", password: "", name: "" });
   const [amount, setAmount] = useState(100);
@@ -98,15 +115,32 @@ export default function App() {
     { id: "notifications", title: i18n.tabs.notifications }
   ];
 
-  const nearestStandardDraws = useMemo(() => {
+  const nearestStandardDraw = useMemo(() => {
     const now = Date.now();
-    return draws
+    return (
+      draws
       .filter((draw) => draw.name?.startsWith("Стандартный тираж"))
       .filter((draw) => draw.status !== "finished")
       .filter((draw) => new Date(draw.drawAt).getTime() >= now)
       .sort((a, b) => new Date(a.drawAt).getTime() - new Date(b.drawAt).getTime())
-      .slice(0, 3);
+      [0] || null
+    );
   }, [draws]);
+
+  const adminDraws = useMemo(() => {
+    return draws
+      .filter((draw) => !draw.name?.startsWith("Стандартный тираж"))
+      .filter((draw) => draw.status !== "finished")
+      .sort((a, b) => new Date(a.drawAt).getTime() - new Date(b.drawAt).getTime());
+  }, [draws]);
+
+  const drawsForGrid = useMemo(() => {
+    const items = [];
+    if (nearestStandardDraw) {
+      items.push(nearestStandardDraw);
+    }
+    return items.concat(adminDraws);
+  }, [nearestStandardDraw, adminDraws]);
 
   const liveDraw = useMemo(() => {
     let drawId = "";
@@ -152,9 +186,9 @@ export default function App() {
   }, [draws, feed]);
 
   function getMatchedNumbers(ticket) {
-    const drawNumbers = ticket.draw?.winningNumbers || [];
+    const drawNumbers = asArray(ticket.draw?.winningNumbers);
     if (drawNumbers.length === 0) return new Set();
-    const matched = ticket.numbers.filter((number) => drawNumbers.includes(number));
+    const matched = asArray(ticket.numbers).filter((number) => drawNumbers.includes(number));
     return new Set(matched);
   }
 
@@ -198,10 +232,10 @@ export default function App() {
         api.wallet(token),
         api.notifications(token)
       ]);
-      setTickets(sortTicketsBySerialDesc(ticketsData.tickets || []));
-      setWallet(walletData.wallet || { balance: 0 });
-      setTransactions(walletData.transactions || []);
-      setNotifications(notificationsData.notifications || []);
+      setTickets(sortTicketsBySerialDesc(asArray(ticketsData?.tickets)));
+      setWallet(normalizeWallet(walletData?.wallet));
+      setTransactions(asArray(walletData?.transactions));
+      setNotifications(asArray(notificationsData?.notifications));
     } catch {
       // keep current state if background refresh failed
     }
@@ -299,6 +333,12 @@ export default function App() {
     return () => clearTimeout(id);
   }, [error]);
 
+  useEffect(() => {
+    if (!drawCreateToastMessage) return;
+    const id = setTimeout(() => setDrawCreateToastMessage(""), 5000);
+    return () => clearTimeout(id);
+  }, [drawCreateToastMessage]);
+
   async function refreshAll() {
     try {
       const [drawsData, walletData, ticketsData, notificationsData] = await Promise.all([
@@ -308,11 +348,11 @@ export default function App() {
         api.notifications(token)
       ]);
 
-      setDraws(drawsData.draws || []);
-      setWallet(walletData.wallet || { balance: 0 });
-      setTransactions(walletData.transactions || []);
-      setTickets(sortTicketsBySerialDesc(ticketsData.tickets || []));
-      setNotifications(notificationsData.notifications || []);
+      setDraws(asArray(drawsData?.draws));
+      setWallet(normalizeWallet(walletData?.wallet));
+      setTransactions(asArray(walletData?.transactions));
+      setTickets(sortTicketsBySerialDesc(asArray(ticketsData?.tickets)));
+      setNotifications(asArray(notificationsData?.notifications));
 
       if (isAdmin) {
         const reportData = await api.reports(token);
@@ -379,7 +419,7 @@ export default function App() {
       const count = Number(buyCounts[draw.id] || 1);
       const result = await api.buyTicket(token, draw.id, count);
       setBuyCounts((prev) => ({ ...prev, [draw.id]: 1 }));
-      setPurchaseReceipt(result.tickets || []);
+      setPurchaseReceipt(asArray(result?.tickets));
       await refreshAll();
     } catch (err) {
       setError(err.message);
@@ -389,24 +429,16 @@ export default function App() {
   async function doCreateDraw(event) {
     event.preventDefault();
     try {
+      setDrawCreateToastMessage("");
       await api.createDraw(token, {
         ...drawForm,
         drawAt: new Date(drawForm.drawAt).toISOString()
       });
       await refreshAll();
     } catch (err) {
-      setError(err.message);
-    }
-  }
-
-  async function adminAction(type, drawId) {
-    try {
-      if (type === "start") await api.startDraw(token, drawId);
-      if (type === "next") await api.nextNumber(token, drawId);
-      if (type === "finish") await api.finishDraw(token, drawId);
-      await refreshAll();
-    } catch (err) {
-      setError(err.message);
+      const message = err?.message || "Не удалось создать тираж";
+      setError(message);
+      setDrawCreateToastMessage(`Создать тираж не удалось: ${message}`);
     }
   }
 
@@ -485,7 +517,7 @@ export default function App() {
       <main>
         {activeTab === "draws" && (
           <section>
-            <h2>Ближайшие стандартные тиражи (каждую минуту)</h2>
+            <h2>Тиражи</h2>
             <div className="live-draw-widget">
               <div className="live-draw-widget__header">
                 <h3>Live-розыгрыш</h3>
@@ -503,19 +535,19 @@ export default function App() {
                 )}
               </div>
             </div>
-            {nearestStandardDraws.length === 0 && (
-              <p>Сейчас нет ближайших стандартных тиражей. Обновление списка происходит автоматически.</p>
-            )}
+            {drawsForGrid.length === 0 && <p>Сейчас нет доступных тиражей. Обновление списка происходит автоматически.</p>}
             <div className="grid">
-              {nearestStandardDraws.map((draw) => (
+              {drawsForGrid.map((draw) => (
+                (() => {
+                  const winningNumbers = asArray(draw.winningNumbers);
+                  return (
                 <article key={draw.id}>
                   <h3>{draw.name}</h3>
                   <p>Время тиража: {new Date(draw.drawAt).toLocaleString()}</p>
                   <p>Статус: {draw.status}</p>
                   <p>Цена билета: {draw.ticketPrice}</p>
-                  <p>Формат билета: 5 из 36, в тираже разыгрывается {draw.numbersCount} чисел</p>
-                  <p>Случайная генерация номеров: включена</p>
-                  <p>Выигрышные: {draw.winningNumbers.join(", ") || "-"}</p>
+                  <p>Формат билета: 5 из {draw.numbersCount}</p>
+                  <p>Выигрышные: {winningNumbers.join(", ") || "-"}</p>
                   {draw.status !== "finished" && (
                     <>
                       <input
@@ -535,6 +567,8 @@ export default function App() {
                     </>
                   )}
                 </article>
+                  );
+                })()
               ))}
             </div>
           </section>
@@ -542,7 +576,7 @@ export default function App() {
 
         {activeTab === "wallet" && (
           <section>
-            <h2>Баланс: {wallet.balance?.toFixed(2)}</h2>
+            <h2>Баланс: {toSafeNumber(wallet?.balance).toFixed(2)}</h2>
             <div className="wallet-actions">
               <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} />
               <button onClick={doDeposit}>Пополнить</button>
@@ -589,7 +623,7 @@ export default function App() {
                   <p>Статус: {ticket.status}</p>
                   <p>Выигрыш: {ticket.winAmount}</p>
                   <div className="ticket-mini-balls">
-                    {ticket.numbers.map((number) => (
+                    {asArray(ticket.numbers).map((number) => (
                       <span key={number} className={matched.has(number) ? "matched-number" : ""}>{number}</span>
                     ))}
                   </div>
@@ -657,18 +691,14 @@ export default function App() {
               <button type="submit">Создать тираж</button>
             </form>
 
-            <h3>Управление тиражами</h3>
+            <h3>Созданные админом тиражи</h3>
+            <p className="hint">Запуск и проведение тиражей выполняется автоматически по таймеру. Ручной старт отключен.</p>
             <div className="grid">
-              {draws.map((draw) => (
+              {adminDraws.map((draw) => (
                 <article key={draw.id}>
                   <h4>{draw.name}</h4>
                   <p>{draw.status}</p>
-                  <p>{draw.winningNumbers.join(", ") || "без номеров"}</p>
-                  <div className="admin-buttons">
-                    <button onClick={() => adminAction("start", draw.id)}>Старт</button>
-                    <button onClick={() => adminAction("next", draw.id)}>След. номер</button>
-                    <button onClick={() => adminAction("finish", draw.id)}>Завершить</button>
-                  </div>
+                  <p>{asArray(draw.winningNumbers).join(", ") || "без номеров"}</p>
                 </article>
               ))}
             </div>
@@ -716,18 +746,18 @@ export default function App() {
             <p className="ticket-time">Исполнен: {new Date(selectedTicket.executedAt || selectedTicket.createdAt).toLocaleString()}</p>
             <p className="ticket-time">Совпадений по розыгрышу: {getMatchedNumbers(selectedTicket).size}</p>
             <div className="ticket-numbers">
-              {selectedTicket.numbers.map((number) => {
+              {asArray(selectedTicket.numbers).map((number) => {
                 const matched = getMatchedNumbers(selectedTicket);
                 return (
                   <span key={number} className={matched.has(number) ? "matched-number" : ""}>{number}</span>
                 );
               })}
             </div>
-            {(selectedTicket.draw?.winningNumbers || []).length > 0 && (
+            {asArray(selectedTicket.draw?.winningNumbers).length > 0 && (
               <>
                 <p className="ticket-time">Числа розыгрыша ({selectedTicket.draw.winningNumbers.length}):</p>
                 <div className="draw-numbers-grid draw-numbers-grid--modal">
-                  {selectedTicket.draw.winningNumbers.map((number, index) => {
+                  {asArray(selectedTicket.draw?.winningNumbers).map((number, index) => {
                     const matched = getMatchedNumbers(selectedTicket);
                     return (
                       <span key={`selected-draw-${index}`} className={matched.has(number) ? "matched-number" : ""}>{number}</span>
@@ -751,6 +781,12 @@ export default function App() {
       {showInsufficientToast && (
         <div className="floating-toast" role="alert">
           Недостаточно средств на балансе
+        </div>
+      )}
+
+      {drawCreateToastMessage && (
+        <div className="floating-toast floating-toast--error" role="alert">
+          {drawCreateToastMessage}
         </div>
       )}
     </div>

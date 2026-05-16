@@ -231,6 +231,12 @@ button:hover {
   font-weight: 600;
 }
 
+.floating-toast--error {
+  border-color: #d65c5c;
+  background: linear-gradient(140deg, #ffe1e1, #ffd2d2);
+  color: #5b1414;
+}
+
 .live-draw-widget {
   margin-bottom: 14px;
   padding: 14px;

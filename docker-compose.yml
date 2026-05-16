@@ -49,7 +49,8 @@ services:
       retries: 10
       start_period: 30s
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
   caddy:
     image: caddy:2-alpine
@@ -61,7 +62,7 @@ services:
     environment:
       - CADDY_DOMAIN=${CADDY_DOMAIN}
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./caddy/data:/data
       - ./caddy/config:/config
     healthcheck:

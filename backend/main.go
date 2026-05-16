@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -211,6 +213,14 @@ func (sr *statusRecorder) Write(data []byte) (int, error) {
 		sr.statusCode = http.StatusOK
 	}
 	return sr.ResponseWriter.Write(data)
+}
+
+func (sr *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := sr.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("response writer does not support hijacking")
+	}
+	return hijacker.Hijack()
 }
 
 func normalizeMetricPath(path string) string {
@@ -957,6 +967,10 @@ func (s *Server) handleCreateDraw(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "drawAt must be ISO datetime"})
 		return
 	}
+	if !drawAt.UTC().After(time.Now().UTC()) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "drawAt must be in the future"})
+		return
+	}
 
 	ctx := r.Context()
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
@@ -1622,7 +1636,7 @@ func (s *Server) drawActionRouter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 5 && parts[3] == "admin" && r.Method == http.MethodPost {
-		s.handleAdminDrawAction(w, r, drawID, parts[4])
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "Manual draw control is disabled. Draws start and run only by scheduler."})
 		return
 	}
 	writeJSON(w, http.StatusNotFound, map[string]string{"error": "Not found"})
