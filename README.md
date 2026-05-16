@@ -95,6 +95,34 @@ docker compose down -v
 docker compose logs -f backend
 ```
 
+## Мониторинг И Надежность
+
+- Для `backend`, `frontend`, `caddy` включены `restart: unless-stopped` и `healthcheck` в `docker-compose.yml`.
+- Базовый health endpoint: `GET /api/health`.
+- Базовые runtime-метрики backend: `GET /api/metrics`.
+
+`/api/metrics` отдает:
+- `uptimeSec`
+- агрегаты `requests`, `errors`, `errorRate`
+- метрики по маршрутам: `avgLatencyMs`, `minLatencyMs`, `maxLatencyMs`, `lastStatus`
+
+## Нагрузочное Тестирование
+
+В проекте добавлен smoke-сценарий для k6: `docs/load/k6_api_smoke.js`.
+
+Пример запуска:
+
+```bash
+# установка k6 (если не установлен)
+# https://k6.io/docs/get-started/installation/
+
+BASE_URL=https://loto.koshsky.ru k6 run docs/load/k6_api_smoke.js
+```
+
+Пороговые условия в сценарии:
+- `http_req_failed < 2%`
+- `http_req_duration p(95) < 3000ms`
+
 ## API (основные)
 
 - `POST /api/auth/register`

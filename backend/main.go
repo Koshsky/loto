@@ -108,6 +108,21 @@ type Server struct {
 	clientsMu   sync.Mutex
 	clients     map[*websocket.Conn]struct{}
 	autoDrawSem chan struct{}
+	startedAt   time.Time
+	metricsMu   sync.Mutex
+	metrics     map[string]*routeMetrics
+	totalReq    int64
+	totalErr    int64
+}
+
+type routeMetrics struct {
+	Requests       int64
+	Errors         int64
+	TotalLatencyMs float64
+	MaxLatencyMs   float64
+	MinLatencyMs   float64
+	LastStatusCode int
+	LastRequestAt  time.Time
 }
 
 const (
@@ -172,7 +187,79 @@ func newServer(db *sql.DB, secret string) *Server {
 		},
 		clients:     make(map[*websocket.Conn]struct{}),
 		autoDrawSem: make(chan struct{}, 1),
+		startedAt:   time.Now().UTC(),
+		metrics:     make(map[string]*routeMetrics),
 	}
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (sr *statusRecorder) WriteHeader(statusCode int) {
+	sr.statusCode = statusCode
+	sr.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (sr *statusRecorder) Write(data []byte) (int, error) {
+	if sr.statusCode == 0 {
+		sr.statusCode = http.StatusOK
+	}
+	return sr.ResponseWriter.Write(data)
+}
+
+func normalizeMetricPath(path string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	for i, part := range parts {
+		if strings.Count(part, "-") == 4 && len(part) >= 32 {
+			parts[i] = ":id"
+		}
+	}
+	if len(parts) == 1 && parts[0] == "" {
+		return "/"
+	}
+	return "/" + strings.Join(parts, "/")
+}
+
+func (s *Server) withMetrics(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		recorder := &statusRecorder{ResponseWriter: w}
+		next.ServeHTTP(recorder, r)
+
+		statusCode := recorder.statusCode
+		if statusCode == 0 {
+			statusCode = http.StatusOK
+		}
+		latencyMs := time.Since(start).Seconds() * 1000
+		metricPath := normalizeMetricPath(r.URL.Path)
+
+		s.metricsMu.Lock()
+		s.totalReq++
+		if statusCode >= 400 {
+			s.totalErr++
+		}
+		entry, exists := s.metrics[metricPath]
+		if !exists {
+			entry = &routeMetrics{MinLatencyMs: latencyMs}
+			s.metrics[metricPath] = entry
+		}
+		entry.Requests++
+		if statusCode >= 400 {
+			entry.Errors++
+		}
+		entry.TotalLatencyMs += latencyMs
+		if latencyMs > entry.MaxLatencyMs {
+			entry.MaxLatencyMs = latencyMs
+		}
+		if !exists || latencyMs < entry.MinLatencyMs {
+			entry.MinLatencyMs = latencyMs
+		}
+		entry.LastStatusCode = statusCode
+		entry.LastRequestAt = time.Now().UTC()
+		s.metricsMu.Unlock()
+	})
 }
 
 func (s *Server) createToken(user User) (string, error) {
@@ -320,7 +407,72 @@ func (s *Server) auditTx(ctx context.Context, tx *sql.Tx, actorUserID, action st
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ts": nowISO()})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":        true,
+		"ts":        nowISO(),
+		"uptimeSec": int(time.Since(s.startedAt).Seconds()),
+	})
+}
+
+func (s *Server) handleMetrics(w http.ResponseWriter, _ *http.Request) {
+	type routeSnapshot struct {
+		Path          string  `json:"path"`
+		Requests      int64   `json:"requests"`
+		Errors        int64   `json:"errors"`
+		ErrorRate     float64 `json:"errorRate"`
+		AvgLatencyMs  float64 `json:"avgLatencyMs"`
+		MinLatencyMs  float64 `json:"minLatencyMs"`
+		MaxLatencyMs  float64 `json:"maxLatencyMs"`
+		LastStatus    int     `json:"lastStatus"`
+		LastRequestAt string  `json:"lastRequestAt,omitempty"`
+	}
+
+	s.metricsMu.Lock()
+	totalReq := s.totalReq
+	totalErr := s.totalErr
+	routes := make([]routeSnapshot, 0, len(s.metrics))
+	for path, m := range s.metrics {
+		avgLatency := 0.0
+		errorRate := 0.0
+		if m.Requests > 0 {
+			avgLatency = m.TotalLatencyMs / float64(m.Requests)
+			errorRate = float64(m.Errors) / float64(m.Requests)
+		}
+		snapshot := routeSnapshot{
+			Path:         path,
+			Requests:     m.Requests,
+			Errors:       m.Errors,
+			ErrorRate:    round2(errorRate * 100),
+			AvgLatencyMs: round2(avgLatency),
+			MinLatencyMs: round2(m.MinLatencyMs),
+			MaxLatencyMs: round2(m.MaxLatencyMs),
+			LastStatus:   m.LastStatusCode,
+		}
+		if !m.LastRequestAt.IsZero() {
+			snapshot.LastRequestAt = toISO(m.LastRequestAt)
+		}
+		routes = append(routes, snapshot)
+	}
+	s.metricsMu.Unlock()
+
+	sort.Slice(routes, func(i, j int) bool {
+		return routes[i].Requests > routes[j].Requests
+	})
+
+	totalErrorRate := 0.0
+	if totalReq > 0 {
+		totalErrorRate = float64(totalErr) / float64(totalReq)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"uptimeSec": int(time.Since(s.startedAt).Seconds()),
+		"totals": map[string]any{
+			"requests":  totalReq,
+			"errors":    totalErr,
+			"errorRate": round2(totalErrorRate * 100),
+		},
+		"routes": routes,
+	})
 }
 
 func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
@@ -1975,6 +2127,7 @@ func main() {
 	startStandardDrawScheduler(srv)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", srv.withCORS(method(http.MethodGet, srv.handleHealth)))
+	mux.HandleFunc("/api/metrics", srv.withCORS(method(http.MethodGet, srv.handleMetrics)))
 	mux.HandleFunc("/api/auth/register", srv.withCORS(method(http.MethodPost, srv.handleRegister)))
 	mux.HandleFunc("/api/auth/login", srv.withCORS(method(http.MethodPost, srv.handleLogin)))
 	mux.HandleFunc("/api/me", srv.withCORS(method(http.MethodGet, srv.handleMe)))
@@ -1994,5 +2147,5 @@ func main() {
 
 	log.Printf("Go backend listening on :%s", port)
 	log.Printf("Admin account: admin@loto.local / admin123")
-	log.Fatal(http.ListenAndServe(":"+port, mux))
+	log.Fatal(http.ListenAndServe(":"+port, srv.withMetrics(mux)))
 }

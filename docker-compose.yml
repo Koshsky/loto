@@ -19,10 +19,17 @@ services:
     build:
       context: ./backend
     container_name: loto-backend
+    restart: unless-stopped
     environment:
       - PORT=${PORT}
       - JWT_SECRET=${JWT_SECRET}
       - DATABASE_URL=${DATABASE_URL}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4000/api/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
     depends_on:
       db:
         condition: service_healthy
@@ -31,15 +38,23 @@ services:
     build:
       context: ./frontend
     container_name: loto-frontend
+    restart: unless-stopped
     environment:
       - CADDY_DOMAIN=${CADDY_DOMAIN}
       - VITE_API_URL=${VITE_API_URL}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5173 >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     depends_on:
       - backend
 
   caddy:
     image: caddy:2-alpine
     container_name: loto-caddy
+    restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
@@ -49,6 +64,12 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./caddy/data:/data
       - ./caddy/config:/config
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
     depends_on:
       - backend
       - frontend

@@ -5,6 +5,7 @@ frontend/dist/
 
 backend/.env_data
 backend/cookies.txt
+backend/loto-backend
 caddy/data/*
 caddy/config/*
 !caddy/data/.gitkeep
