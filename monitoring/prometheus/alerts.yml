@@ -1,0 +1,20 @@
+groups:
+  - name: loto-availability
+    rules:
+      - alert: EndpointDown
+        expr: probe_success == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Endpoint is down"
+          description: "{{ $labels.instance }} did not return HTTP 2xx"
+
+      - alert: EndpointHighLatency
+        expr: probe_duration_seconds > 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Endpoint latency above 3s"
+          description: "{{ $labels.instance }} latency is {{ $value }}s"

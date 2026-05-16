@@ -9,6 +9,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -134,10 +135,13 @@ const (
 )
 
 var (
-	lottoDrawnNumbersCount = mustEnvInt("LOTTO_DRAWN_NUMBERS_COUNT", 18)
-	prizeBig               = mustEnvFloat("LOTTO_PRIZE_5_MATCHES", 5000.0)
-	prizeMedium            = mustEnvFloat("LOTTO_PRIZE_4_MATCHES", 1000.0)
-	prizeSmall             = mustEnvFloat("LOTTO_PRIZE_3_MATCHES", 100.0)
+	lottoDrawnNumbersCount     = mustEnvInt("LOTTO_DRAWN_NUMBERS_COUNT", 18)
+	prizeBig                   = mustEnvFloat("LOTTO_PRIZE_5_MATCHES", 5000.0)
+	prizeMedium                = mustEnvFloat("LOTTO_PRIZE_4_MATCHES", 1000.0)
+	prizeSmall                 = mustEnvFloat("LOTTO_PRIZE_3_MATCHES", 100.0)
+	notificationsRetentionDays = mustEnvInt("RETENTION_NOTIFICATIONS_DAYS", 365*5)
+	auditRetentionDays         = mustEnvInt("RETENTION_AUDIT_DAYS", 365*5)
+	retentionJobIntervalMin    = mustEnvInt("RETENTION_JOB_INTERVAL_MIN", 360)
 )
 
 func mustEnvInt(name string, fallback int) int {
@@ -304,6 +308,49 @@ func readJSON(r *http.Request, dst any) error {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	return dec.Decode(dst)
+}
+
+func parseTimeFilter(value string) (*time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+	if t, err := time.Parse(time.RFC3339, value); err == nil {
+		t = t.UTC()
+		return &t, nil
+	}
+	t, err := time.Parse("2006-01-02", value)
+	if err != nil {
+		return nil, fmt.Errorf("invalid datetime format")
+	}
+	t = t.UTC()
+	return &t, nil
+}
+
+func parseHistoryFilters(values url.Values, defaultLimit, maxLimit int) (*time.Time, *time.Time, int, error) {
+	from, err := parseTimeFilter(values.Get("from"))
+	if err != nil {
+		return nil, nil, 0, errors.New("invalid 'from' parameter")
+	}
+	to, err := parseTimeFilter(values.Get("to"))
+	if err != nil {
+		return nil, nil, 0, errors.New("invalid 'to' parameter")
+	}
+	if from != nil && to != nil && from.After(*to) {
+		return nil, nil, 0, errors.New("'from' must be less than or equal to 'to'")
+	}
+	limit := defaultLimit
+	if rawLimit := strings.TrimSpace(values.Get("limit")); rawLimit != "" {
+		parsed, parseErr := strconv.Atoi(rawLimit)
+		if parseErr != nil || parsed <= 0 {
+			return nil, nil, 0, errors.New("invalid 'limit' parameter")
+		}
+		if parsed > maxLimit {
+			parsed = maxLimit
+		}
+		limit = parsed
+	}
+	return from, to, limit, nil
 }
 
 func (s *Server) withCORS(next http.HandlerFunc) http.HandlerFunc {
@@ -593,6 +640,11 @@ func (s *Server) handleWallet(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
 		return
 	}
+	from, to, limit, err := parseHistoryFilters(r.URL.Query(), 100, 500)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
 	var wallet Wallet
 	var updatedAt sql.NullTime
@@ -611,13 +663,25 @@ func (s *Server) handleWallet(w http.ResponseWriter, r *http.Request) {
 		wallet.UpdatedAt = nowISO()
 	}
 
-	rows, err := s.db.Query(`
+	args := []any{user.ID}
+	filters := []string{"user_id = $1"}
+	if from != nil {
+		args = append(args, *from)
+		filters = append(filters, fmt.Sprintf("created_at >= $%d", len(args)))
+	}
+	if to != nil {
+		args = append(args, *to)
+		filters = append(filters, fmt.Sprintf("created_at <= $%d", len(args)))
+	}
+	args = append(args, limit)
+	query := fmt.Sprintf(`
 		SELECT id, user_id, type, amount, balance_after, meta, created_at
 		FROM wallet_transactions
-		WHERE user_id = $1
+		WHERE %s
 		ORDER BY created_at DESC, ctid DESC
-		LIMIT 100
-	`, user.ID)
+		LIMIT $%d
+	`, strings.Join(filters, " AND "), len(args))
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "DB error"})
 		return
@@ -819,12 +883,31 @@ func (s *Server) handleDraws(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
 		return
 	}
+	from, to, limit, err := parseHistoryFilters(r.URL.Query(), 500, 2000)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
-	rows, err := s.db.Query(`
+	args := []any{}
+	filters := []string{"TRUE"}
+	if from != nil {
+		args = append(args, *from)
+		filters = append(filters, fmt.Sprintf("draw_at >= $%d", len(args)))
+	}
+	if to != nil {
+		args = append(args, *to)
+		filters = append(filters, fmt.Sprintf("draw_at <= $%d", len(args)))
+	}
+	args = append(args, limit)
+	query := fmt.Sprintf(`
 		SELECT id, name, draw_at, ticket_price, max_number, numbers_count, status, winning_numbers, created_at, started_at, finished_at
 		FROM draws
+		WHERE %s
 		ORDER BY created_at DESC
-	`)
+		LIMIT $%d
+	`, strings.Join(filters, " AND "), len(args))
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "DB error"})
 		return
@@ -1034,6 +1117,7 @@ func (s *Server) handleBuyTicket(w http.ResponseWriter, r *http.Request, drawID 
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "DB error"})
 		return
 	}
+	log.Printf("ticket purchase: user=%s draw=%s count=%d total=%.2f", user.ID, drawID, req.Count, totalPrice)
 
 	writeJSON(w, http.StatusCreated, map[string]any{"tickets": createdTickets, "count": req.Count})
 }
@@ -1044,8 +1128,24 @@ func (s *Server) handleMyTickets(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
 		return
 	}
+	from, to, limit, err := parseHistoryFilters(r.URL.Query(), 200, 1000)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 
-	rows, err := s.db.Query(`
+	args := []any{user.ID}
+	filters := []string{"t.user_id = $1"}
+	if from != nil {
+		args = append(args, *from)
+		filters = append(filters, fmt.Sprintf("t.created_at >= $%d", len(args)))
+	}
+	if to != nil {
+		args = append(args, *to)
+		filters = append(filters, fmt.Sprintf("t.created_at <= $%d", len(args)))
+	}
+	args = append(args, limit)
+	query := fmt.Sprintf(`
 		SELECT
 			t.id,
 			t.serial_number,
@@ -1068,9 +1168,11 @@ func (s *Server) handleMyTickets(w http.ResponseWriter, r *http.Request) {
 			d.finished_at
 		FROM tickets t
 		LEFT JOIN draws d ON d.id = t.draw_id
-		WHERE t.user_id = $1
+		WHERE %s
 		ORDER BY t.serial_number DESC NULLS LAST, t.created_at DESC
-	`, user.ID)
+		LIMIT $%d
+	`, strings.Join(filters, " AND "), len(args))
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "DB error"})
 		return
@@ -1223,6 +1325,7 @@ func (s *Server) handleAdminDrawAction(w http.ResponseWriter, r *http.Request, d
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "DB error"})
 			return
 		}
+		log.Printf("draw start: admin=%s draw=%s", admin.ID, drawID)
 		s.broadcast(map[string]any{"type": "draw.started", "payload": draw})
 		writeJSON(w, http.StatusOK, map[string]any{"draw": draw})
 		return
@@ -1261,6 +1364,7 @@ func (s *Server) handleAdminDrawAction(w http.ResponseWriter, r *http.Request, d
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "DB error"})
 			return
 		}
+		log.Printf("draw next number: admin=%s draw=%s number=%d", admin.ID, drawID, nextNumber)
 		s.broadcast(map[string]any{"type": "draw.number", "payload": map[string]any{"drawId": drawID, "number": nextNumber, "winningNumbers": draw.WinningNumbers}})
 		writeJSON(w, http.StatusOK, map[string]any{"draw": draw, "number": nextNumber})
 		return
@@ -1363,6 +1467,7 @@ func (s *Server) handleAdminDrawAction(w http.ResponseWriter, r *http.Request, d
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "DB error"})
 			return
 		}
+		log.Printf("draw finish: admin=%s draw=%s winning_numbers=%d", admin.ID, drawID, len(draw.WinningNumbers))
 		s.broadcast(map[string]any{"type": "draw.finished", "payload": draw})
 		writeJSON(w, http.StatusOK, map[string]any{"draw": draw})
 		return
@@ -1377,13 +1482,30 @@ func (s *Server) handleNotifications(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
 		return
 	}
-	rows, err := s.db.Query(`
+	from, to, limit, err := parseHistoryFilters(r.URL.Query(), 100, 1000)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	args := []any{user.ID}
+	filters := []string{"user_id = $1"}
+	if from != nil {
+		args = append(args, *from)
+		filters = append(filters, fmt.Sprintf("created_at >= $%d", len(args)))
+	}
+	if to != nil {
+		args = append(args, *to)
+		filters = append(filters, fmt.Sprintf("created_at <= $%d", len(args)))
+	}
+	args = append(args, limit)
+	query := fmt.Sprintf(`
 		SELECT id, user_id, type, message, created_at
 		FROM notifications
-		WHERE user_id = $1
+		WHERE %s
 		ORDER BY created_at DESC
-		LIMIT 100
-	`, user.ID)
+		LIMIT $%d
+	`, strings.Join(filters, " AND "), len(args))
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "DB error"})
 		return
@@ -1828,6 +1950,36 @@ func normalizeWalletBalances(db *sql.DB) error {
 	return err
 }
 
+func applyRetentionPolicies(db *sql.DB) error {
+	if notificationsRetentionDays > 0 {
+		result, err := db.Exec(`
+			DELETE FROM notifications
+			WHERE created_at < NOW() - ($1::int * INTERVAL '1 day')
+		`, notificationsRetentionDays)
+		if err != nil {
+			return err
+		}
+		if rows, rowsErr := result.RowsAffected(); rowsErr == nil && rows > 0 {
+			log.Printf("retention: deleted %d notifications older than %d days", rows, notificationsRetentionDays)
+		}
+	}
+
+	if auditRetentionDays > 0 {
+		result, err := db.Exec(`
+			DELETE FROM audit_events
+			WHERE created_at < NOW() - ($1::int * INTERVAL '1 day')
+		`, auditRetentionDays)
+		if err != nil {
+			return err
+		}
+		if rows, rowsErr := result.RowsAffected(); rowsErr == nil && rows > 0 {
+			log.Printf("retention: deleted %d audit events older than %d days", rows, auditRetentionDays)
+		}
+	}
+
+	return nil
+}
+
 func (s *Server) tryRunAutoDraws() {
 	select {
 	case s.autoDrawSem <- struct{}{}:
@@ -2063,6 +2215,9 @@ func startStandardDrawScheduler(s *Server) {
 	if err := ensureStandardDraws(s.db); err != nil {
 		log.Printf("standard draw init error: %v", err)
 	}
+	if err := applyRetentionPolicies(s.db); err != nil {
+		log.Printf("retention init error: %v", err)
+	}
 	s.tryRunAutoDraws()
 
 	go func() {
@@ -2081,6 +2236,18 @@ func startStandardDrawScheduler(s *Server) {
 			}
 			if err := ensureStandardDraws(s.db); err != nil {
 				log.Printf("standard draw scheduler error: %v", err)
+			}
+		}
+	}()
+
+	go func() {
+		interval := time.Duration(retentionJobIntervalMin) * time.Minute
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			if err := applyRetentionPolicies(s.db); err != nil {
+				log.Printf("retention scheduler error: %v", err)
 			}
 		}
 	}()

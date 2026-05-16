@@ -1,18 +1,56 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { api, createDrawStream } from "./api";
 
-const TABS = [
-  { id: "draws", title: "Тиражи" },
-  { id: "wallet", title: "Баланс" },
-  { id: "tickets", title: "Мои билеты" },
-  { id: "notifications", title: "Уведомления" }
-];
+const I18N = {
+  ru: {
+    tabs: {
+      draws: "Тиражи",
+      wallet: "Баланс",
+      tickets: "Мои билеты",
+      notifications: "Уведомления",
+      admin: "Админ"
+    },
+    actions: {
+      refresh: "Обновить",
+      logout: "Выйти",
+      login: "Войти",
+      register: "Зарегистрироваться"
+    },
+    labels: {
+      streamOnline: "онлайн",
+      streamConnecting: "подключение",
+      streamOffline: "оффлайн"
+    }
+  },
+  en: {
+    tabs: {
+      draws: "Draws",
+      wallet: "Wallet",
+      tickets: "My tickets",
+      notifications: "Notifications",
+      admin: "Admin"
+    },
+    actions: {
+      refresh: "Refresh",
+      logout: "Logout",
+      login: "Sign in",
+      register: "Sign up"
+    },
+    labels: {
+      streamOnline: "online",
+      streamConnecting: "connecting",
+      streamOffline: "offline"
+    }
+  }
+};
 
 function sortTicketsBySerialDesc(tickets) {
   return [...(tickets || [])].sort((a, b) => Number(b.serialNumber || 0) - Number(a.serialNumber || 0));
 }
 
 export default function App() {
+  const defaultLang = (localStorage.getItem("lang") || "ru").toLowerCase();
+  const [lang, setLang] = useState(defaultLang === "en" ? "en" : "ru");
   const [token, setToken] = useState(localStorage.getItem("token") || "");
   const [user, setUser] = useState(() => {
     const raw = localStorage.getItem("user");
@@ -52,6 +90,13 @@ export default function App() {
   });
 
   const isAdmin = user?.role === "admin";
+  const i18n = I18N[lang] || I18N.ru;
+  const tabs = [
+    { id: "draws", title: i18n.tabs.draws },
+    { id: "wallet", title: i18n.tabs.wallet },
+    { id: "tickets", title: i18n.tabs.tickets },
+    { id: "notifications", title: i18n.tabs.notifications }
+  ];
 
   const nearestStandardDraws = useMemo(() => {
     const now = Date.now();
@@ -390,7 +435,7 @@ export default function App() {
               value={authForm.password}
               onChange={(e) => setAuthForm((prev) => ({ ...prev, password: e.target.value }))}
             />
-            <button type="submit">{authMode === "login" ? "Войти" : "Зарегистрироваться"}</button>
+            <button type="submit">{authMode === "login" ? i18n.actions.login : i18n.actions.register}</button>
           </form>
           <button className="link-btn" onClick={() => setAuthMode(authMode === "login" ? "register" : "login")}>
             {authMode === "login" ? "Нет аккаунта? Регистрация" : "Есть аккаунт? Вход"}
@@ -410,21 +455,30 @@ export default function App() {
           <p>{user.name} ({user.role})</p>
         </div>
         <div className="header-buttons">
-          <button onClick={refreshAll}>Обновить</button>
-          <button onClick={logout}>Выйти</button>
+          <button
+            className="lang-toggle"
+            onClick={() => {
+              const next = lang === "ru" ? "en" : "ru";
+              setLang(next);
+              localStorage.setItem("lang", next);
+            }}
+          >
+            {lang === "ru" ? "RU / EN" : "EN / RU"}
+          </button>
+          <button onClick={logout}>{i18n.actions.logout}</button>
         </div>
       </header>
 
       {error && error !== "Insufficient balance" && <p className="error">{error}</p>}
 
       <nav>
-        {TABS.map((tab) => (
+        {tabs.map((tab) => (
           <button key={tab.id} className={activeTab === tab.id ? "active" : ""} onClick={() => setActiveTab(tab.id)}>
             {tab.title}
           </button>
         ))}
         {isAdmin && (
-          <button className={activeTab === "admin" ? "active" : ""} onClick={() => setActiveTab("admin")}>Админ</button>
+          <button className={activeTab === "admin" ? "active" : ""} onClick={() => setActiveTab("admin")}>{i18n.tabs.admin}</button>
         )}
       </nav>
 
@@ -436,7 +490,7 @@ export default function App() {
               <div className="live-draw-widget__header">
                 <h3>Live-розыгрыш</h3>
                 <span>
-                  Поток: {streamStatus === "connected" ? "онлайн" : streamStatus === "connecting" ? "подключение" : "оффлайн"}
+                  Поток: {streamStatus === "connected" ? i18n.labels.streamOnline : streamStatus === "connecting" ? i18n.labels.streamConnecting : i18n.labels.streamOffline}
                 </span>
               </div>
               <p>{liveDraw.title}</p>

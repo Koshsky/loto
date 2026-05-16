@@ -49,6 +49,7 @@ docker compose up --build
 - `CADDY_DOMAIN`
 - `LOTTO_DRAWN_NUMBERS_COUNT`
 - `LOTTO_PRIZE_5_MATCHES`, `LOTTO_PRIZE_4_MATCHES`, `LOTTO_PRIZE_3_MATCHES`
+- `RETENTION_NOTIFICATIONS_DAYS`, `RETENTION_AUDIT_DAYS`, `RETENTION_JOB_INTERVAL_MIN`
 - `JWT_SECRET`
 - `DATABASE_URL`
 - `VITE_API_URL`
@@ -60,6 +61,9 @@ docker compose up --build
 - `LOTTO_PRIZE_3_MATCHES` - выигрыш за 3 совпадения.
 - `5 из 36` остается фиксированным форматом билета.
 - `CADDY_DOMAIN` - домен, по которому Caddy выдает сайт и автоматически получает TLS-сертификат.
+- `RETENTION_NOTIFICATIONS_DAYS` - срок хранения уведомлений.
+- `RETENTION_AUDIT_DAYS` - срок хранения аудита.
+- `RETENTION_JOB_INTERVAL_MIN` - интервал фоновой retention-задачи.
 
 Пример заполнения есть в `.env.example`.
 
@@ -109,6 +113,9 @@ docker compose logs -f backend
 ## Нагрузочное Тестирование
 
 В проекте добавлен smoke-сценарий для k6: `docs/load/k6_api_smoke.js`.
+Дополнительно:
+- `docs/load/k6_ticket_purchase.js` - нагрузка на покупку билетов.
+- `docs/load/k6_ws_stream.js` - проверка WebSocket-подключений.
 
 Пример запуска:
 
@@ -117,6 +124,10 @@ docker compose logs -f backend
 # https://k6.io/docs/get-started/installation/
 
 BASE_URL=https://loto.koshsky.ru k6 run docs/load/k6_api_smoke.js
+
+BASE_URL=https://loto.koshsky.ru USER_EMAIL=admin@loto.local USER_PASSWORD=admin123 k6 run docs/load/k6_ticket_purchase.js
+
+BASE_URL=https://loto.koshsky.ru k6 run docs/load/k6_ws_stream.js
 ```
 
 Пороговые условия в сценарии:
@@ -139,3 +150,31 @@ BASE_URL=https://loto.koshsky.ru k6 run docs/load/k6_api_smoke.js
 - `POST /api/draws/:drawId/admin/next-number`
 - `POST /api/draws/:drawId/admin/finish`
 - `GET /api/admin/reports`
+
+## Фильтры Истории
+
+Для эндпоинтов `GET /api/wallet`, `GET /api/draws`, `GET /api/my/tickets`, `GET /api/notifications`
+добавлены query-параметры:
+- `from` - начало периода (`RFC3339` или `YYYY-MM-DD`)
+- `to` - конец периода (`RFC3339` или `YYYY-MM-DD`)
+- `limit` - максимальное количество записей
+
+Пример:
+
+```bash
+curl -H "Authorization: Bearer <TOKEN>" "https://loto.koshsky.ru/api/my/tickets?from=2026-05-01&to=2026-05-31&limit=200"
+```
+
+## Мониторинг И Алертинг (Profile)
+
+Добавлен отдельный compose-файл `docker-compose.monitoring.yml` с сервисами:
+- `prometheus`
+- `alertmanager`
+- `blackbox`
+- `grafana`
+
+Запуск:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.monitoring.yml --profile monitoring up -d
+```

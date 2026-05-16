@@ -1,0 +1,12 @@
+modules:
+  http_service_probe:
+    prober: http
+    timeout: 5s
+    http:
+      preferred_ip_protocol: ip4
+      method: GET
+      headers:
+        Host: localhost
+      no_follow_redirects: true
+      valid_status_codes: [200, 301, 302, 307, 308]
+      valid_http_versions: ["HTTP/1.1", "HTTP/2"]
