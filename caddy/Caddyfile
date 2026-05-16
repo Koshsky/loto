@@ -1,8 +1,5 @@
-{
-	auto_https disable_redirects
-}
 
-http://{$CADDY_DOMAIN}, http://127.0.0.1 {
+(loto_app) {
 	encode gzip zstd
 
 	handle /favicon.ico {
@@ -29,30 +26,15 @@ SVG 200
 	}
 }
 
-https://{$CADDY_DOMAIN}, https://127.0.0.1 {
+http://localhost, http://127.0.0.1 {
+	import loto_app
+}
+
+https://localhost, https://127.0.0.1 {
 	tls internal
-	encode gzip zstd
+	import loto_app
+}
 
-	handle /favicon.ico {
-		header Content-Type image/svg+xml
-		respond <<SVG
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#b4432f"/><circle cx="21" cy="22" r="6" fill="#ffe9b9"/><circle cx="42" cy="22" r="6" fill="#ffe9b9"/><circle cx="21" cy="42" r="6" fill="#ffe9b9"/><circle cx="42" cy="42" r="6" fill="#ffe9b9"/></svg>
-SVG 200
-	}
-
-	handle /api* {
-		reverse_proxy loto-backend:4000
-	}
-
-	handle /ws* {
-		reverse_proxy loto-backend:4000 {
-			transport http {
-				versions 1.1
-			}
-		}
-	}
-
-	handle {
-		reverse_proxy loto-frontend:5173
-	}
+{$CADDY_DOMAIN} {
+	import loto_app
 }
