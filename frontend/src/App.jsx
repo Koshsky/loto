@@ -1,0 +1,704 @@
+import React, { useEffect, useMemo, useState } from "react";
+import { api, createDrawStream } from "./api";
+
+const TABS = [
+  { id: "draws", title: "Тиражи" },
+  { id: "wallet", title: "Баланс" },
+  { id: "tickets", title: "Мои билеты" },
+  { id: "notifications", title: "Уведомления" }
+];
+
+function sortTicketsBySerialDesc(tickets) {
+  return [...(tickets || [])].sort((a, b) => Number(b.serialNumber || 0) - Number(a.serialNumber || 0));
+}
+
+export default function App() {
+  const [token, setToken] = useState(localStorage.getItem("token") || "");
+  const [user, setUser] = useState(() => {
+    const raw = localStorage.getItem("user");
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw);
+    } catch {
+      localStorage.removeItem("user");
+      localStorage.removeItem("token");
+      return null;
+    }
+  });
+
+  const [authMode, setAuthMode] = useState("login");
+  const [error, setError] = useState("");
+  const [feed, setFeed] = useState([]);
+  const [streamStatus, setStreamStatus] = useState("disconnected");
+  const [activeTab, setActiveTab] = useState("draws");
+
+  const [draws, setDraws] = useState([]);
+  const [wallet, setWallet] = useState({ balance: 0 });
+  const [transactions, setTransactions] = useState([]);
+  const [tickets, setTickets] = useState([]);
+  const [notifications, setNotifications] = useState([]);
+  const [report, setReport] = useState(null);
+  const [purchaseReceipt, setPurchaseReceipt] = useState(null);
+  const [selectedTicket, setSelectedTicket] = useState(null);
+  const [showInsufficientToast, setShowInsufficientToast] = useState(false);
+
+  const [authForm, setAuthForm] = useState({ email: "", password: "", name: "" });
+  const [amount, setAmount] = useState(100);
+  const [buyCounts, setBuyCounts] = useState({});
+  const [drawForm, setDrawForm] = useState({
+    name: "Вечерний тираж",
+    drawAt: new Date(Date.now() + 3600000).toISOString().slice(0, 16),
+    ticketPrice: 50
+  });
+
+  const isAdmin = user?.role === "admin";
+
+  const nearestStandardDraws = useMemo(() => {
+    const now = Date.now();
+    return draws
+      .filter((draw) => draw.name?.startsWith("Стандартный тираж"))
+      .filter((draw) => draw.status !== "finished")
+      .filter((draw) => new Date(draw.drawAt).getTime() >= now)
+      .sort((a, b) => new Date(a.drawAt).getTime() - new Date(b.drawAt).getTime())
+      .slice(0, 3);
+  }, [draws]);
+
+  const liveDraw = useMemo(() => {
+    let drawId = "";
+    let status = "idle";
+    let numbers = [];
+
+    for (const event of feed) {
+      if (event.type === "draw.number") {
+        drawId = event.payload?.drawId || "";
+        status = "running";
+        numbers = event.payload?.winningNumbers || [];
+        break;
+      }
+      if (event.type === "draw.started") {
+        drawId = event.payload?.id || "";
+        status = "running";
+        numbers = event.payload?.winningNumbers || [];
+        break;
+      }
+      if (event.type === "draw.finished") {
+        drawId = event.payload?.id || "";
+        status = "finished";
+        numbers = event.payload?.winningNumbers || [];
+        break;
+      }
+    }
+
+    const drawFromList = draws.find((draw) => draw.id === drawId) || draws.find((draw) => draw.status === "running");
+    if (!drawFromList) {
+      return {
+        title: "Ожидание следующего тиража",
+        status,
+        numbers
+      };
+    }
+
+    const fallbackNumbers = drawFromList.winningNumbers || [];
+    return {
+      title: drawFromList.name,
+      status: drawFromList.status === "running" ? "running" : status,
+      numbers: numbers.length > 0 ? numbers : fallbackNumbers
+    };
+  }, [draws, feed]);
+
+  function getMatchedNumbers(ticket) {
+    const drawNumbers = ticket.draw?.winningNumbers || [];
+    if (drawNumbers.length === 0) return new Set();
+    const matched = ticket.numbers.filter((number) => drawNumbers.includes(number));
+    return new Set(matched);
+  }
+
+  function applyDrawToTickets(drawId, winningNumbers, drawStatus) {
+    if (!drawId) return;
+    const normalizedNumbers = Array.isArray(winningNumbers) ? winningNumbers : [];
+
+    setTickets((prev) =>
+      prev.map((ticket) => {
+        if (ticket.drawId !== drawId) return ticket;
+        return {
+          ...ticket,
+          draw: {
+            ...(ticket.draw || {}),
+            id: ticket.draw?.id || drawId,
+            winningNumbers: normalizedNumbers,
+            ...(drawStatus ? { status: drawStatus } : {})
+          }
+        };
+      })
+    );
+
+    setSelectedTicket((prev) => {
+      if (!prev || prev.drawId !== drawId) return prev;
+      return {
+        ...prev,
+        draw: {
+          ...(prev.draw || {}),
+          id: prev.draw?.id || drawId,
+          winningNumbers: normalizedNumbers,
+          ...(drawStatus ? { status: drawStatus } : {})
+        }
+      };
+    });
+  }
+
+  async function refreshTicketsAndWallet() {
+    try {
+      const [ticketsData, walletData, notificationsData] = await Promise.all([
+        api.myTickets(token),
+        api.wallet(token),
+        api.notifications(token)
+      ]);
+      setTickets(sortTicketsBySerialDesc(ticketsData.tickets || []));
+      setWallet(walletData.wallet || { balance: 0 });
+      setTransactions(walletData.transactions || []);
+      setNotifications(notificationsData.notifications || []);
+    } catch {
+      // keep current state if background refresh failed
+    }
+  }
+
+  useEffect(() => {
+    if (!token) return;
+
+    let socket;
+    try {
+      socket = createDrawStream(
+        (message) => {
+          setFeed((prev) => [message, ...prev].slice(0, 40));
+
+          if (message.type === "draw.started") {
+            const draw = message.payload || {};
+            setDraws((prev) =>
+              prev.map((item) =>
+                item.id === draw.id
+                  ? {
+                      ...item,
+                      ...draw,
+                      status: "running",
+                      winningNumbers: draw.winningNumbers || item.winningNumbers || []
+                    }
+                  : item
+              )
+            );
+            applyDrawToTickets(draw.id, draw.winningNumbers || [], "running");
+          }
+
+          if (message.type === "draw.number") {
+            const payload = message.payload || {};
+            setDraws((prev) =>
+              prev.map((item) =>
+                item.id === payload.drawId
+                  ? {
+                      ...item,
+                      status: "running",
+                      winningNumbers: payload.winningNumbers || item.winningNumbers || []
+                    }
+                  : item
+              )
+            );
+            applyDrawToTickets(payload.drawId, payload.winningNumbers || [], "running");
+          }
+
+          if (message.type === "draw.finished") {
+            const draw = message.payload || {};
+            setDraws((prev) =>
+              prev.map((item) =>
+                item.id === draw.id
+                  ? {
+                      ...item,
+                      ...draw,
+                      status: "finished",
+                      winningNumbers: draw.winningNumbers || item.winningNumbers || []
+                    }
+                  : item
+              )
+            );
+            applyDrawToTickets(draw.id, draw.winningNumbers || [], "finished");
+            void refreshTicketsAndWallet();
+          }
+        },
+        (status) => setStreamStatus(status)
+      );
+    } catch {
+      // ignore websocket errors
+    }
+
+    return () => {
+      if (socket) socket.close();
+      setStreamStatus("disconnected");
+    };
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    refreshAll();
+  }, [token]);
+
+  useEffect(() => {
+    if (!token) return;
+    const id = setInterval(() => {
+      refreshAll();
+    }, 15000);
+    return () => clearInterval(id);
+  }, [token, isAdmin]);
+
+  useEffect(() => {
+    if (error !== "Insufficient balance") return;
+    setShowInsufficientToast(true);
+    const id = setTimeout(() => setShowInsufficientToast(false), 3500);
+    return () => clearTimeout(id);
+  }, [error]);
+
+  async function refreshAll() {
+    try {
+      const [drawsData, walletData, ticketsData, notificationsData] = await Promise.all([
+        api.draws(token),
+        api.wallet(token),
+        api.myTickets(token),
+        api.notifications(token)
+      ]);
+
+      setDraws(drawsData.draws || []);
+      setWallet(walletData.wallet || { balance: 0 });
+      setTransactions(walletData.transactions || []);
+      setTickets(sortTicketsBySerialDesc(ticketsData.tickets || []));
+      setNotifications(notificationsData.notifications || []);
+
+      if (isAdmin) {
+        const reportData = await api.reports(token);
+        setReport(reportData);
+      }
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function submitAuth(event) {
+    event.preventDefault();
+    setError("");
+    try {
+      const result =
+        authMode === "login"
+          ? await api.login({ email: authForm.email, password: authForm.password })
+          : await api.register(authForm);
+
+      localStorage.setItem("token", result.token);
+      localStorage.setItem("user", JSON.stringify(result.user));
+      setToken(result.token);
+      setUser(result.user);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  function logout() {
+    localStorage.removeItem("token");
+    localStorage.removeItem("user");
+    setToken("");
+    setUser(null);
+    setDraws([]);
+    setTickets([]);
+    setNotifications([]);
+    setTransactions([]);
+    setReport(null);
+    setFeed([]);
+    setPurchaseReceipt(null);
+    setSelectedTicket(null);
+  }
+
+  async function doDeposit() {
+    try {
+      await api.deposit(token, Number(amount));
+      await refreshAll();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function doWithdraw() {
+    try {
+      await api.withdraw(token, Number(amount));
+      await refreshAll();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function doBuyTicket(draw) {
+    try {
+      const count = Number(buyCounts[draw.id] || 1);
+      const result = await api.buyTicket(token, draw.id, count);
+      setBuyCounts((prev) => ({ ...prev, [draw.id]: 1 }));
+      setPurchaseReceipt(result.tickets || []);
+      await refreshAll();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function doCreateDraw(event) {
+    event.preventDefault();
+    try {
+      await api.createDraw(token, {
+        ...drawForm,
+        drawAt: new Date(drawForm.drawAt).toISOString()
+      });
+      await refreshAll();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  async function adminAction(type, drawId) {
+    try {
+      if (type === "start") await api.startDraw(token, drawId);
+      if (type === "next") await api.nextNumber(token, drawId);
+      if (type === "finish") await api.finishDraw(token, drawId);
+      await refreshAll();
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
+  if (!token || !user) {
+    return (
+      <div className="auth-page">
+        <div className="auth-card">
+          <h1>Loto</h1>
+          <p>Онлайн-лото с фейковым балансом и тиражами.</p>
+          <form onSubmit={submitAuth}>
+            {authMode === "register" && (
+              <input
+                placeholder="Имя"
+                value={authForm.name}
+                onChange={(e) => setAuthForm((prev) => ({ ...prev, name: e.target.value }))}
+              />
+            )}
+            <input
+              placeholder="Email"
+              value={authForm.email}
+              onChange={(e) => setAuthForm((prev) => ({ ...prev, email: e.target.value }))}
+            />
+            <input
+              type="password"
+              placeholder="Пароль"
+              value={authForm.password}
+              onChange={(e) => setAuthForm((prev) => ({ ...prev, password: e.target.value }))}
+            />
+            <button type="submit">{authMode === "login" ? "Войти" : "Зарегистрироваться"}</button>
+          </form>
+          <button className="link-btn" onClick={() => setAuthMode(authMode === "login" ? "register" : "login")}>
+            {authMode === "login" ? "Нет аккаунта? Регистрация" : "Есть аккаунт? Вход"}
+          </button>
+          <p className="hint">Тест-админ: admin@loto.local / admin123</p>
+          {error && <p className="error">{error}</p>}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="app-shell">
+      <header>
+        <div>
+          <h1>Loto</h1>
+          <p>{user.name} ({user.role})</p>
+        </div>
+        <div className="header-buttons">
+          <button onClick={refreshAll}>Обновить</button>
+          <button onClick={logout}>Выйти</button>
+        </div>
+      </header>
+
+      {error && error !== "Insufficient balance" && <p className="error">{error}</p>}
+
+      <nav>
+        {TABS.map((tab) => (
+          <button key={tab.id} className={activeTab === tab.id ? "active" : ""} onClick={() => setActiveTab(tab.id)}>
+            {tab.title}
+          </button>
+        ))}
+        {isAdmin && (
+          <button className={activeTab === "admin" ? "active" : ""} onClick={() => setActiveTab("admin")}>Админ</button>
+        )}
+      </nav>
+
+      <main>
+        {activeTab === "draws" && (
+          <section>
+            <h2>Ближайшие стандартные тиражи (каждую минуту)</h2>
+            <div className="live-draw-widget">
+              <div className="live-draw-widget__header">
+                <h3>Live-розыгрыш</h3>
+                <span>
+                  Поток: {streamStatus === "connected" ? "онлайн" : streamStatus === "connecting" ? "подключение" : "оффлайн"}
+                </span>
+              </div>
+              <p>{liveDraw.title}</p>
+              <p>Статус: {liveDraw.status === "running" ? "идёт розыгрыш" : liveDraw.status === "finished" ? "завершён" : "ожидание"}</p>
+              <div className="live-draw-widget__numbers">
+                {liveDraw.numbers.length > 0 ? (
+                  liveDraw.numbers.map((number) => <span key={number}>{number}</span>)
+                ) : (
+                  <span className="live-draw-widget__empty">Числа появятся здесь в реальном времени</span>
+                )}
+              </div>
+            </div>
+            {nearestStandardDraws.length === 0 && (
+              <p>Сейчас нет ближайших стандартных тиражей. Обновление списка происходит автоматически.</p>
+            )}
+            <div className="grid">
+              {nearestStandardDraws.map((draw) => (
+                <article key={draw.id}>
+                  <h3>{draw.name}</h3>
+                  <p>Время тиража: {new Date(draw.drawAt).toLocaleString()}</p>
+                  <p>Статус: {draw.status}</p>
+                  <p>Цена билета: {draw.ticketPrice}</p>
+                  <p>Формат билета: 5 из 36, в тираже разыгрывается {draw.numbersCount} чисел</p>
+                  <p>Случайная генерация номеров: включена</p>
+                  <p>Выигрышные: {draw.winningNumbers.join(", ") || "-"}</p>
+                  {draw.status !== "finished" && (
+                    <>
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        placeholder="Количество билетов"
+                        value={buyCounts[draw.id] || 1}
+                        onChange={(e) =>
+                          setBuyCounts((prev) => ({
+                            ...prev,
+                            [draw.id]: e.target.value
+                          }))
+                        }
+                      />
+                      <button onClick={() => doBuyTicket(draw)}>Купить билеты</button>
+                    </>
+                  )}
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {activeTab === "wallet" && (
+          <section>
+            <h2>Баланс: {wallet.balance?.toFixed(2)}</h2>
+            <div className="wallet-actions">
+              <input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} />
+              <button onClick={doDeposit}>Пополнить</button>
+              <button onClick={doWithdraw}>Снять выигрыш</button>
+            </div>
+            <h3>История операций</h3>
+            <ul>
+              {transactions.map((tx) => (
+                <li key={tx.id}>
+                  {new Date(tx.createdAt).toLocaleString()} | {tx.type} | {tx.amount} | остаток {tx.balanceAfter}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {activeTab === "tickets" && (
+          <section>
+            <h2>Мои билеты</h2>
+            <div className="ticket-grid">
+              {tickets.map((ticket) => (
+                (() => {
+                  const matched = getMatchedNumbers(ticket);
+                  const drawNumbers = ticket.draw?.winningNumbers || [];
+                  return (
+                <article
+                  key={ticket.id}
+                  className="ticket-card"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setSelectedTicket(ticket)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      setSelectedTicket(ticket);
+                    }
+                  }}
+                >
+                  <div className="ticket-card__top">
+                    <span>Билет</span>
+                    <strong>#{ticket.serialNumber}</strong>
+                  </div>
+                  <p>Дата исполнения: {new Date(ticket.executedAt || ticket.createdAt).toLocaleString()}</p>
+                  <p>Статус: {ticket.status}</p>
+                  <p>Выигрыш: {ticket.winAmount}</p>
+                  <div className="ticket-mini-balls">
+                    {ticket.numbers.map((number) => (
+                      <span key={number} className={matched.has(number) ? "matched-number" : ""}>{number}</span>
+                    ))}
+                  </div>
+                  {drawNumbers.length > 0 && (
+                    <>
+                      <p>Числа розыгрыша ({drawNumbers.length}):</p>
+                      <div className="draw-numbers-grid">
+                        {drawNumbers.map((number, index) => (
+                          <span key={`${ticket.id}-draw-${index}`} className={matched.has(number) ? "matched-number" : ""}>
+                            {number}
+                          </span>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </article>
+                  );
+                })()
+              ))}
+            </div>
+          </section>
+        )}
+
+        {activeTab === "notifications" && (
+          <section>
+            <h2>Уведомления</h2>
+            <p>
+              Статус live-потока: {streamStatus === "connected" ? "подключено" : streamStatus === "connecting" ? "подключение" : "отключено"}
+            </p>
+            <ul>
+              {notifications.map((item) => (
+                <li key={item.id}>{new Date(item.createdAt).toLocaleString()} | {item.message}</li>
+              ))}
+            </ul>
+            <h3>Поток тиража (WebSocket)</h3>
+            <ul>
+              {feed.map((event, index) => (
+                <li key={`${event.type}-${index}`}>{event.type}: {JSON.stringify(event.payload)}</li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {isAdmin && activeTab === "admin" && (
+          <section>
+            <h2>Администрирование</h2>
+            <form className="admin-form" onSubmit={doCreateDraw}>
+              <input
+                placeholder="Название"
+                value={drawForm.name}
+                onChange={(e) => setDrawForm((prev) => ({ ...prev, name: e.target.value }))}
+              />
+              <input
+                type="datetime-local"
+                value={drawForm.drawAt}
+                onChange={(e) => setDrawForm((prev) => ({ ...prev, drawAt: e.target.value }))}
+              />
+              <input
+                type="number"
+                placeholder="Цена"
+                value={drawForm.ticketPrice}
+                onChange={(e) => setDrawForm((prev) => ({ ...prev, ticketPrice: Number(e.target.value) }))}
+              />
+              <p className="hint">Формат зафиксирован: билет 5 из 36. Количество разыгрываемых чисел задается на сервере через .env.</p>
+              <button type="submit">Создать тираж</button>
+            </form>
+
+            <h3>Управление тиражами</h3>
+            <div className="grid">
+              {draws.map((draw) => (
+                <article key={draw.id}>
+                  <h4>{draw.name}</h4>
+                  <p>{draw.status}</p>
+                  <p>{draw.winningNumbers.join(", ") || "без номеров"}</p>
+                  <div className="admin-buttons">
+                    <button onClick={() => adminAction("start", draw.id)}>Старт</button>
+                    <button onClick={() => adminAction("next", draw.id)}>След. номер</button>
+                    <button onClick={() => adminAction("finish", draw.id)}>Завершить</button>
+                  </div>
+                </article>
+              ))}
+            </div>
+
+            {report && (
+              <>
+                <h3>KPI</h3>
+                <p>
+                  Продажи: {report.kpi.sales} | Выплаты: {report.kpi.payouts} | Маржа: {report.kpi.margin} |
+                  Тиражей: {report.kpi.draws} | Билетов: {report.kpi.tickets}
+                </p>
+              </>
+            )}
+          </section>
+        )}
+      </main>
+
+      {purchaseReceipt && (
+        <div className="modal-backdrop" onClick={() => setPurchaseReceipt(null)}>
+          <div className="modal-card purchase-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Билеты куплены</h3>
+              <button className="ghost-button" onClick={() => setPurchaseReceipt(null)}>
+                Закрыть
+              </button>
+            </div>
+            <p>Серийные номера купленных билетов:</p>
+            <div className="serial-list">
+              {purchaseReceipt.map((ticket) => (
+                <span key={ticket.id}>#{ticket.serialNumber}</span>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedTicket && (
+        <div className="modal-backdrop" onClick={() => setSelectedTicket(null)}>
+          <div className="modal-card lotto-ticket" onClick={(event) => event.stopPropagation()}>
+            <div className="ticket-strip">
+              <span>LOTTO</span>
+              <span>#{selectedTicket.serialNumber}</span>
+            </div>
+            <h3>Счастливый билет</h3>
+            <p className="ticket-time">Исполнен: {new Date(selectedTicket.executedAt || selectedTicket.createdAt).toLocaleString()}</p>
+            <p className="ticket-time">Совпадений по розыгрышу: {getMatchedNumbers(selectedTicket).size}</p>
+            <div className="ticket-numbers">
+              {selectedTicket.numbers.map((number) => {
+                const matched = getMatchedNumbers(selectedTicket);
+                return (
+                  <span key={number} className={matched.has(number) ? "matched-number" : ""}>{number}</span>
+                );
+              })}
+            </div>
+            {(selectedTicket.draw?.winningNumbers || []).length > 0 && (
+              <>
+                <p className="ticket-time">Числа розыгрыша ({selectedTicket.draw.winningNumbers.length}):</p>
+                <div className="draw-numbers-grid draw-numbers-grid--modal">
+                  {selectedTicket.draw.winningNumbers.map((number, index) => {
+                    const matched = getMatchedNumbers(selectedTicket);
+                    return (
+                      <span key={`selected-draw-${index}`} className={matched.has(number) ? "matched-number" : ""}>{number}</span>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+            <p className="ticket-message">На этом билете сгенерированы лотто-числа. Сохраняйте серийный номер для истории и проверки результатов.</p>
+            <div className="ticket-footer">
+              <span>Статус: {selectedTicket.status}</span>
+              <span>Выигрыш: {selectedTicket.winAmount}</span>
+            </div>
+            <button className="ghost-button" onClick={() => setSelectedTicket(null)}>
+              Закрыть билет
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showInsufficientToast && (
+        <div className="floating-toast" role="alert">
+          Недостаточно средств на балансе
+        </div>
+      )}
+    </div>
+  );
+}

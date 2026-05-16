@@ -1,0 +1,370 @@
+:root {
+  --bg: #f4f1ea;
+  --bg-accent: #ece2cf;
+  --ink: #1b1b1b;
+  --card: #fffaf2;
+  --line: #cbbf9d;
+  --brand: #b4432f;
+  --brand-dark: #8e2f1f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Manrope", sans-serif;
+  color: var(--ink);
+  background:
+    radial-gradient(circle at 20% 20%, rgba(180, 67, 47, 0.08), transparent 40%),
+    radial-gradient(circle at 80% 0%, rgba(79, 96, 65, 0.08), transparent 35%),
+    linear-gradient(135deg, var(--bg), var(--bg-accent));
+  min-height: 100vh;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: "Unbounded", sans-serif;
+  margin: 0 0 12px;
+}
+
+.auth-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.auth-card {
+  width: min(460px, 100%);
+  background: var(--card);
+  border: 2px solid var(--line);
+  border-radius: 18px;
+  padding: 24px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.08);
+}
+
+.auth-card form,
+.admin-form {
+  display: grid;
+  gap: 10px;
+}
+
+input,
+button {
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  padding: 10px 12px;
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+  background: var(--brand);
+  color: #fff;
+  border-color: var(--brand);
+  transition: transform 0.15s ease, background 0.2s ease;
+}
+
+button:hover {
+  transform: translateY(-1px);
+  background: var(--brand-dark);
+}
+
+.link-btn {
+  background: transparent;
+  color: var(--brand-dark);
+  border-color: transparent;
+  margin-top: 8px;
+}
+
+.ghost-button {
+  background: transparent;
+  color: var(--brand-dark);
+  border-color: var(--line);
+}
+
+.ticket-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.ticket-card {
+  cursor: pointer;
+  background: linear-gradient(160deg, #fffdf7, #f7e9cf);
+  border: 1px solid #e3cfa4;
+  border-radius: 18px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.08);
+}
+
+.ticket-card__top,
+.modal-header,
+.ticket-strip,
+.ticket-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.ticket-card__top strong,
+.serial-list span,
+.ticket-strip span:last-child {
+  font-family: "Unbounded", sans-serif;
+}
+
+.ticket-mini-balls,
+.ticket-numbers,
+.serial-list,
+.draw-numbers-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ticket-mini-balls span,
+.ticket-numbers span,
+.serial-list span,
+.draw-numbers-grid span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(25, 18, 10, 0.55);
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  z-index: 40;
+}
+
+.modal-card {
+  width: min(560px, 100%);
+  background: var(--card);
+  border: 2px solid var(--line);
+  border-radius: 22px;
+  padding: 20px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.25);
+}
+
+.purchase-modal {
+  max-width: 460px;
+}
+
+.lotto-ticket {
+  background: linear-gradient(160deg, #fff9eb, #ffe4bf);
+  border-style: dashed;
+}
+
+.ticket-strip {
+  padding-bottom: 10px;
+  border-bottom: 1px dashed rgba(0, 0, 0, 0.2);
+  margin-bottom: 16px;
+}
+
+.ticket-time,
+.ticket-message {
+  margin: 10px 0;
+}
+
+.ticket-numbers span,
+.ticket-mini-balls span {
+  font-family: "Unbounded", sans-serif;
+  font-size: 14px;
+}
+
+.ticket-footer {
+  margin: 16px 0 20px;
+  flex-wrap: wrap;
+}
+
+.serial-list {
+  margin-top: 14px;
+}
+
+.serial-list span {
+  background: #f4e4c1;
+}
+
+.draw-numbers-grid {
+  margin-top: 6px;
+}
+
+.draw-numbers-grid--modal {
+  margin-bottom: 10px;
+}
+
+.matched-number {
+  background: linear-gradient(150deg, #ffeec6, #ffd57b) !important;
+  border-color: #cf8f22 !important;
+  color: #5b3500;
+  font-weight: 700;
+}
+
+.floating-toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 60;
+  min-width: 260px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: 1px solid #d8a248;
+  background: linear-gradient(140deg, #fff3d8, #ffe5b8);
+  color: #5a3600;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.18);
+  font-weight: 600;
+}
+
+.live-draw-widget {
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid #dcb874;
+  border-radius: 14px;
+  background: linear-gradient(150deg, #fff7e3, #ffe8c5);
+}
+
+.live-draw-widget__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.live-draw-widget__header h3 {
+  margin: 0;
+}
+
+.live-draw-widget__numbers {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.live-draw-widget__numbers span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  min-height: 42px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  font-family: "Unbounded", sans-serif;
+  font-size: 14px;
+}
+
+.live-draw-widget__empty {
+  padding: 8px 12px;
+  min-width: auto;
+  border-radius: 8px;
+  font-family: "Manrope", sans-serif;
+  font-size: 13px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.hint {
+  font-size: 13px;
+  opacity: 0.8;
+}
+
+.error {
+  color: #8d1111;
+  background: #ffe5e5;
+  padding: 8px;
+  border-radius: 8px;
+}
+
+.app-shell {
+  width: min(1200px, 100% - 24px);
+  margin: 12px auto 30px;
+  display: grid;
+  gap: 14px;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--card);
+  border: 2px solid var(--line);
+  padding: 16px;
+  border-radius: 16px;
+}
+
+.header-buttons,
+nav,
+.wallet-actions,
+.admin-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+nav button.active {
+  background: #4f6041;
+  border-color: #4f6041;
+}
+
+main section {
+  background: var(--card);
+  border: 2px solid var(--line);
+  border-radius: 16px;
+  padding: 16px;
+  animation: reveal 0.3s ease;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 10px;
+}
+
+article {
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+@keyframes reveal {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 700px) {
+  header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+}
