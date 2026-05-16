@@ -416,7 +416,12 @@ export default function App() {
 
   async function doBuyTicket(draw) {
     try {
-      const count = Number(buyCounts[draw.id] || 1);
+      const rawCount = buyCounts[draw.id];
+      const count = rawCount === "" || rawCount == null ? 1 : Number(rawCount);
+      if (!Number.isInteger(count) || count < 1) {
+        setError("Введите корректное количество билетов (целое число от 1)");
+        return;
+      }
       const result = await api.buyTicket(token, draw.id, count);
       setBuyCounts((prev) => ({ ...prev, [draw.id]: 1 }));
       setPurchaseReceipt(asArray(result?.tickets));
@@ -555,7 +560,7 @@ export default function App() {
                         min="1"
                         step="1"
                         placeholder="Количество билетов"
-                        value={buyCounts[draw.id] || 1}
+                        value={buyCounts[draw.id] ?? 1}
                         onChange={(e) =>
                           setBuyCounts((prev) => ({
                             ...prev,
