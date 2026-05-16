@@ -417,7 +417,12 @@ export default function App() {
   async function doBuyTicket(draw) {
     try {
       const rawCount = buyCounts[draw.id];
-      const count = rawCount === "" || rawCount == null ? 1 : Number(rawCount);
+      if (rawCount === "") {
+        setError("Введите количество билетов перед покупкой");
+        return;
+      }
+
+      const count = rawCount == null ? 1 : Number(rawCount);
       if (!Number.isInteger(count) || count < 1) {
         setError("Введите корректное количество билетов (целое число от 1)");
         return;
