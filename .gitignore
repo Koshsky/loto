@@ -5,3 +5,7 @@ frontend/dist/
 
 backend/.env_data
 backend/cookies.txt
+caddy/data/*
+caddy/config/*
+!caddy/data/.gitkeep
+!caddy/config/.gitkeep

@@ -32,6 +32,7 @@ services:
       context: ./frontend
     container_name: loto-frontend
     environment:
+      - CADDY_DOMAIN=${CADDY_DOMAIN}
       - VITE_API_URL=${VITE_API_URL}
     depends_on:
       - backend
@@ -46,13 +47,11 @@ services:
       - CADDY_DOMAIN=${CADDY_DOMAIN}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
+      - ./caddy/data:/data
+      - ./caddy/config:/config
     depends_on:
       - backend
       - frontend
 
 volumes:
   pgdata:
-  caddy_data:
-  caddy_config:
