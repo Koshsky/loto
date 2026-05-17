@@ -37,6 +37,19 @@ CREATE TABLE public.audit_events (
 ALTER TABLE public.audit_events OWNER TO postgres;
 
 --
+-- Name: app_settings; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.app_settings (
+    key text NOT NULL,
+    value text NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+ALTER TABLE public.app_settings OWNER TO postgres;
+
+--
 -- Name: draws; Type: TABLE; Schema: public; Owner: postgres
 --
 
@@ -143,6 +156,14 @@ ALTER TABLE public.wallet_transactions OWNER TO postgres;
 
 ALTER TABLE ONLY public.audit_events
     ADD CONSTRAINT audit_events_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: app_settings app_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.app_settings
+    ADD CONSTRAINT app_settings_pkey PRIMARY KEY (key);
 
 
 --

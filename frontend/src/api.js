@@ -78,6 +78,8 @@ export const api = {
   startDraw: (token, drawId) => request(`/api/draws/${drawId}/admin/start`, { method: "POST", token }),
   nextNumber: (token, drawId) => request(`/api/draws/${drawId}/admin/next-number`, { method: "POST", token }),
   finishDraw: (token, drawId) => request(`/api/draws/${drawId}/admin/finish`, { method: "POST", token }),
+  adminSettings: (token) => request("/api/admin/settings", { token }),
+  updateAdminSettings: (token, payload) => request("/api/admin/settings", { method: "PUT", token, body: payload }),
   reports: (token) => request("/api/admin/reports", { token }),
   reportsPdf: (token) => requestFile("/api/admin/reports/pdf", { token })
 };

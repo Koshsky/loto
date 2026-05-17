@@ -64,6 +64,22 @@ function normalizeWallet(wallet) {
   };
 }
 
+function normalizeAdminSettings(settings) {
+  return {
+    lottoDrawnNumbersCount: toSafeNumber(settings?.lottoDrawnNumbersCount, 18),
+    lottoBarrelsCount: toSafeNumber(settings?.lottoBarrelsCount, 36),
+    lottoTicketNumbersCount: toSafeNumber(settings?.lottoTicketNumbersCount, 5),
+    prizeBig: toSafeNumber(settings?.prizeBig, 5000),
+    prizeMedium: toSafeNumber(settings?.prizeMedium, 1000),
+    prizeSmall: toSafeNumber(settings?.prizeSmall, 100),
+    notificationsRetentionDays: toSafeNumber(settings?.notificationsRetentionDays, 1825),
+    auditRetentionDays: toSafeNumber(settings?.auditRetentionDays, 1825),
+    retentionJobIntervalMin: toSafeNumber(settings?.retentionJobIntervalMin, 360),
+    standardDrawIntervalMin: toSafeNumber(settings?.standardDrawIntervalMin, 1),
+    standardDrawFutureCount: toSafeNumber(settings?.standardDrawFutureCount, 8)
+  };
+}
+
 export default function App() {
   const defaultLang = (localStorage.getItem("lang") || "ru").toLowerCase();
   const [lang, setLang] = useState(defaultLang === "en" ? "en" : "ru");
@@ -92,6 +108,9 @@ export default function App() {
   const [tickets, setTickets] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [report, setReport] = useState(null);
+  const [adminSettings, setAdminSettings] = useState(null);
+  const [settingsForm, setSettingsForm] = useState(normalizeAdminSettings(null));
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [isDownloadingReport, setIsDownloadingReport] = useState(false);
   const [purchaseReceipt, setPurchaseReceipt] = useState(null);
   const [selectedTicket, setSelectedTicket] = useState(null);
@@ -320,6 +339,11 @@ export default function App() {
   }, [token]);
 
   useEffect(() => {
+    if (!token || !isAdmin) return;
+    loadAdminSettings();
+  }, [token, isAdmin]);
+
+  useEffect(() => {
     if (!token) return;
     const id = setInterval(() => {
       refreshAll();
@@ -364,6 +388,17 @@ export default function App() {
     }
   }
 
+  async function loadAdminSettings() {
+    try {
+      const response = await api.adminSettings(token);
+      const normalized = normalizeAdminSettings(response?.settings);
+      setAdminSettings(normalized);
+      setSettingsForm(normalized);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
+
   async function submitAuth(event) {
     event.preventDefault();
     setError("");
@@ -392,6 +427,8 @@ export default function App() {
     setNotifications([]);
     setTransactions([]);
     setReport(null);
+    setAdminSettings(null);
+    setSettingsForm(normalizeAdminSettings(null));
     setFeed([]);
     setPurchaseReceipt(null);
     setSelectedTicket(null);
@@ -472,6 +509,37 @@ export default function App() {
       setError(err.message);
     } finally {
       setIsDownloadingReport(false);
+    }
+  }
+
+  async function saveAdminSettings(event) {
+    event.preventDefault();
+    try {
+      setError("");
+      setIsSavingSettings(true);
+      const payload = {
+        lottoDrawnNumbersCount: Number(settingsForm.lottoDrawnNumbersCount),
+        lottoBarrelsCount: Number(settingsForm.lottoBarrelsCount),
+        lottoTicketNumbersCount: Number(settingsForm.lottoTicketNumbersCount),
+        prizeBig: Number(settingsForm.prizeBig),
+        prizeMedium: Number(settingsForm.prizeMedium),
+        prizeSmall: Number(settingsForm.prizeSmall),
+        notificationsRetentionDays: Number(settingsForm.notificationsRetentionDays),
+        auditRetentionDays: Number(settingsForm.auditRetentionDays),
+        retentionJobIntervalMin: Number(settingsForm.retentionJobIntervalMin),
+        standardDrawIntervalMin: Number(settingsForm.standardDrawIntervalMin),
+        standardDrawFutureCount: Number(settingsForm.standardDrawFutureCount)
+      };
+
+      const result = await api.updateAdminSettings(token, payload);
+      const normalized = normalizeAdminSettings(result?.settings);
+      setAdminSettings(normalized);
+      setSettingsForm(normalized);
+      await refreshAll();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsSavingSettings(false);
     }
   }
 
@@ -703,6 +771,118 @@ export default function App() {
         {isAdmin && activeTab === "admin" && (
           <section>
             <h2>Администрирование</h2>
+
+            <h3>Параметры системы</h3>
+            <form className="admin-form admin-settings-form" onSubmit={saveAdminSettings}>
+              <div className="admin-settings-grid">
+                <label>
+                  Выпавших чисел в тираже
+                  <input
+                    type="number"
+                    min="3"
+                    value={settingsForm.lottoDrawnNumbersCount}
+                    onChange={(e) => setSettingsForm((prev) => ({ ...prev, lottoDrawnNumbersCount: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Количество бочонков
+                  <input
+                    type="number"
+                    min="5"
+                    value={settingsForm.lottoBarrelsCount}
+                    onChange={(e) => setSettingsForm((prev) => ({ ...prev, lottoBarrelsCount: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Чисел в билете
+                  <input
+                    type="number"
+                    min="3"
+                    value={settingsForm.lottoTicketNumbersCount}
+                    onChange={(e) => setSettingsForm((prev) => ({ ...prev, lottoTicketNumbersCount: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Приз за максимум совпадений
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={settingsForm.prizeBig}
+                    onChange={(e) => setSettingsForm((prev) => ({ ...prev, prizeBig: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Приз за -1 совпадение
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={settingsForm.prizeMedium}
+                    onChange={(e) => setSettingsForm((prev) => ({ ...prev, prizeMedium: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Приз за -2 совпадения
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={settingsForm.prizeSmall}
+                    onChange={(e) => setSettingsForm((prev) => ({ ...prev, prizeSmall: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Хранение уведомлений (дней)
+                  <input
+                    type="number"
+                    min="0"
+                    value={settingsForm.notificationsRetentionDays}
+                    onChange={(e) => setSettingsForm((prev) => ({ ...prev, notificationsRetentionDays: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Хранение аудита (дней)
+                  <input
+                    type="number"
+                    min="0"
+                    value={settingsForm.auditRetentionDays}
+                    onChange={(e) => setSettingsForm((prev) => ({ ...prev, auditRetentionDays: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Интервал retention-задачи (мин)
+                  <input
+                    type="number"
+                    min="1"
+                    value={settingsForm.retentionJobIntervalMin}
+                    onChange={(e) => setSettingsForm((prev) => ({ ...prev, retentionJobIntervalMin: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Интервал стандартных тиражей (мин)
+                  <input
+                    type="number"
+                    min="1"
+                    value={settingsForm.standardDrawIntervalMin}
+                    onChange={(e) => setSettingsForm((prev) => ({ ...prev, standardDrawIntervalMin: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  Количество будущих стандартных тиражей
+                  <input
+                    type="number"
+                    min="1"
+                    value={settingsForm.standardDrawFutureCount}
+                    onChange={(e) => setSettingsForm((prev) => ({ ...prev, standardDrawFutureCount: e.target.value }))}
+                  />
+                </label>
+              </div>
+              <button type="submit" disabled={isSavingSettings}>
+                {isSavingSettings ? "Сохранение..." : "Сохранить параметры"}
+              </button>
+            </form>
+
             <form className="admin-form" onSubmit={doCreateDraw}>
               <input
                 placeholder="Название"
@@ -720,7 +900,10 @@ export default function App() {
                 value={drawForm.ticketPrice}
                 onChange={(e) => setDrawForm((prev) => ({ ...prev, ticketPrice: Number(e.target.value) }))}
               />
-              <p className="hint">Формат зафиксирован: билет 5 из 36. Количество разыгрываемых чисел задается на сервере через .env.</p>
+              <p className="hint">
+                Текущий формат: билет {adminSettings?.lottoTicketNumbersCount || settingsForm.lottoTicketNumbersCount} из {adminSettings?.lottoBarrelsCount || settingsForm.lottoBarrelsCount},
+                разыгрывается {adminSettings?.lottoDrawnNumbersCount || settingsForm.lottoDrawnNumbersCount} чисел.
+              </p>
               <button type="submit">Создать тираж</button>
             </form>
 

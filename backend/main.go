@@ -118,6 +118,36 @@ type Server struct {
 	metrics     map[string]*routeMetrics
 	totalReq    int64
 	totalErr    int64
+	settingsMu  sync.RWMutex
+	settings    AppSettings
+}
+
+type AppSettings struct {
+	LottoDrawnNumbersCount     int     `json:"lottoDrawnNumbersCount"`
+	LottoBarrelsCount          int     `json:"lottoBarrelsCount"`
+	LottoTicketNumbersCount    int     `json:"lottoTicketNumbersCount"`
+	PrizeBig                   float64 `json:"prizeBig"`
+	PrizeMedium                float64 `json:"prizeMedium"`
+	PrizeSmall                 float64 `json:"prizeSmall"`
+	NotificationsRetentionDays int     `json:"notificationsRetentionDays"`
+	AuditRetentionDays         int     `json:"auditRetentionDays"`
+	RetentionJobIntervalMin    int     `json:"retentionJobIntervalMin"`
+	StandardDrawIntervalMin    int     `json:"standardDrawIntervalMin"`
+	StandardDrawFutureCount    int     `json:"standardDrawFutureCount"`
+}
+
+type settingsUpdateRequest struct {
+	LottoDrawnNumbersCount     *int     `json:"lottoDrawnNumbersCount"`
+	LottoBarrelsCount          *int     `json:"lottoBarrelsCount"`
+	LottoTicketNumbersCount    *int     `json:"lottoTicketNumbersCount"`
+	PrizeBig                   *float64 `json:"prizeBig"`
+	PrizeMedium                *float64 `json:"prizeMedium"`
+	PrizeSmall                 *float64 `json:"prizeSmall"`
+	NotificationsRetentionDays *int     `json:"notificationsRetentionDays"`
+	AuditRetentionDays         *int     `json:"auditRetentionDays"`
+	RetentionJobIntervalMin    *int     `json:"retentionJobIntervalMin"`
+	StandardDrawIntervalMin    *int     `json:"standardDrawIntervalMin"`
+	StandardDrawFutureCount    *int     `json:"standardDrawFutureCount"`
 }
 
 type routeMetrics struct {
@@ -131,21 +161,17 @@ type routeMetrics struct {
 }
 
 const (
-	standardDrawBaseName    = "Стандартный тираж"
-	standardDrawIntervalMin = 1
-	standardDrawFutureCount = 8
-	lottoBarrelsCount       = 36
-	lottoTicketNumbersCount = 5
-)
-
-var (
-	lottoDrawnNumbersCount     = mustEnvInt("LOTTO_DRAWN_NUMBERS_COUNT", 18)
-	prizeBig                   = mustEnvFloat("LOTTO_PRIZE_5_MATCHES", 5000.0)
-	prizeMedium                = mustEnvFloat("LOTTO_PRIZE_4_MATCHES", 1000.0)
-	prizeSmall                 = mustEnvFloat("LOTTO_PRIZE_3_MATCHES", 100.0)
-	notificationsRetentionDays = mustEnvInt("RETENTION_NOTIFICATIONS_DAYS", 365*5)
-	auditRetentionDays         = mustEnvInt("RETENTION_AUDIT_DAYS", 365*5)
-	retentionJobIntervalMin    = mustEnvInt("RETENTION_JOB_INTERVAL_MIN", 360)
+	standardDrawBaseName        = "Стандартный тираж"
+	defaultDrawnNumbersCount    = 18
+	defaultLottoBarrelsCount    = 36
+	defaultTicketNumbersCount   = 5
+	defaultPrizeBig             = 5000.0
+	defaultPrizeMedium          = 1000.0
+	defaultPrizeSmall           = 100.0
+	defaultRetentionDays        = 365 * 5
+	defaultRetentionIntervalMin = 360
+	defaultDrawIntervalMin      = 1
+	defaultDrawFutureCount      = 8
 )
 
 func mustEnvInt(name string, fallback int) int {
@@ -197,7 +223,36 @@ func newServer(db *sql.DB, secret string) *Server {
 		autoDrawSem: make(chan struct{}, 1),
 		startedAt:   time.Now().UTC(),
 		metrics:     make(map[string]*routeMetrics),
+		settings:    defaultAppSettings(),
 	}
+}
+
+func defaultAppSettings() AppSettings {
+	return AppSettings{
+		LottoDrawnNumbersCount:     mustEnvInt("LOTTO_DRAWN_NUMBERS_COUNT", defaultDrawnNumbersCount),
+		LottoBarrelsCount:          defaultLottoBarrelsCount,
+		LottoTicketNumbersCount:    defaultTicketNumbersCount,
+		PrizeBig:                   mustEnvFloat("LOTTO_PRIZE_5_MATCHES", defaultPrizeBig),
+		PrizeMedium:                mustEnvFloat("LOTTO_PRIZE_4_MATCHES", defaultPrizeMedium),
+		PrizeSmall:                 mustEnvFloat("LOTTO_PRIZE_3_MATCHES", defaultPrizeSmall),
+		NotificationsRetentionDays: mustEnvInt("RETENTION_NOTIFICATIONS_DAYS", defaultRetentionDays),
+		AuditRetentionDays:         mustEnvInt("RETENTION_AUDIT_DAYS", defaultRetentionDays),
+		RetentionJobIntervalMin:    mustEnvInt("RETENTION_JOB_INTERVAL_MIN", defaultRetentionIntervalMin),
+		StandardDrawIntervalMin:    defaultDrawIntervalMin,
+		StandardDrawFutureCount:    defaultDrawFutureCount,
+	}
+}
+
+func (s *Server) getSettings() AppSettings {
+	s.settingsMu.RLock()
+	defer s.settingsMu.RUnlock()
+	return s.settings
+}
+
+func (s *Server) setSettings(cfg AppSettings) {
+	s.settingsMu.Lock()
+	s.settings = cfg
+	s.settingsMu.Unlock()
 }
 
 type statusRecorder struct {
@@ -365,11 +420,256 @@ func parseHistoryFilters(values url.Values, defaultLimit, maxLimit int) (*time.T
 	return from, to, limit, nil
 }
 
+func validateAppSettings(cfg AppSettings) error {
+	if cfg.LottoBarrelsCount < 5 || cfg.LottoBarrelsCount > 200 {
+		return errors.New("lottoBarrelsCount must be between 5 and 200")
+	}
+	if cfg.LottoTicketNumbersCount < 3 || cfg.LottoTicketNumbersCount > cfg.LottoBarrelsCount {
+		return errors.New("lottoTicketNumbersCount must be between 3 and lottoBarrelsCount")
+	}
+	if cfg.LottoDrawnNumbersCount < cfg.LottoTicketNumbersCount || cfg.LottoDrawnNumbersCount > cfg.LottoBarrelsCount {
+		return errors.New("lottoDrawnNumbersCount must be between lottoTicketNumbersCount and lottoBarrelsCount")
+	}
+	if cfg.PrizeBig < 0 || cfg.PrizeMedium < 0 || cfg.PrizeSmall < 0 {
+		return errors.New("prizes must be greater than or equal to 0")
+	}
+	if cfg.PrizeBig < cfg.PrizeMedium || cfg.PrizeMedium < cfg.PrizeSmall {
+		return errors.New("prizeBig must be >= prizeMedium and prizeMedium must be >= prizeSmall")
+	}
+	if cfg.NotificationsRetentionDays < 0 || cfg.AuditRetentionDays < 0 {
+		return errors.New("retention days must be greater than or equal to 0")
+	}
+	if cfg.RetentionJobIntervalMin < 1 || cfg.RetentionJobIntervalMin > 10080 {
+		return errors.New("retentionJobIntervalMin must be between 1 and 10080")
+	}
+	if cfg.StandardDrawIntervalMin < 1 || cfg.StandardDrawIntervalMin > 1440 {
+		return errors.New("standardDrawIntervalMin must be between 1 and 1440")
+	}
+	if cfg.StandardDrawFutureCount < 1 || cfg.StandardDrawFutureCount > 1000 {
+		return errors.New("standardDrawFutureCount must be between 1 and 1000")
+	}
+	return nil
+}
+
+func settingsToDBMap(cfg AppSettings) map[string]string {
+	return map[string]string{
+		"lottoDrawnNumbersCount":     strconv.Itoa(cfg.LottoDrawnNumbersCount),
+		"lottoBarrelsCount":          strconv.Itoa(cfg.LottoBarrelsCount),
+		"lottoTicketNumbersCount":    strconv.Itoa(cfg.LottoTicketNumbersCount),
+		"prizeBig":                   strconv.FormatFloat(cfg.PrizeBig, 'f', 2, 64),
+		"prizeMedium":                strconv.FormatFloat(cfg.PrizeMedium, 'f', 2, 64),
+		"prizeSmall":                 strconv.FormatFloat(cfg.PrizeSmall, 'f', 2, 64),
+		"notificationsRetentionDays": strconv.Itoa(cfg.NotificationsRetentionDays),
+		"auditRetentionDays":         strconv.Itoa(cfg.AuditRetentionDays),
+		"retentionJobIntervalMin":    strconv.Itoa(cfg.RetentionJobIntervalMin),
+		"standardDrawIntervalMin":    strconv.Itoa(cfg.StandardDrawIntervalMin),
+		"standardDrawFutureCount":    strconv.Itoa(cfg.StandardDrawFutureCount),
+	}
+}
+
+func (s *Server) saveSettingsTx(ctx context.Context, tx *sql.Tx, cfg AppSettings) error {
+	for key, value := range settingsToDBMap(cfg) {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO app_settings (key, value)
+			VALUES ($1, $2)
+			ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+		`, key, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Server) saveSettings(cfg AppSettings) error {
+	ctx := context.Background()
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if err = s.saveSettingsTx(ctx, tx, cfg); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+func (s *Server) loadSettingsFromDB() error {
+	cfg := defaultAppSettings()
+
+	rows, err := s.db.Query(`SELECT key, value FROM app_settings`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var key, raw string
+		if err = rows.Scan(&key, &raw); err != nil {
+			return err
+		}
+
+		switch key {
+		case "lottoDrawnNumbersCount":
+			if value, parseErr := strconv.Atoi(raw); parseErr == nil {
+				cfg.LottoDrawnNumbersCount = value
+			}
+		case "lottoBarrelsCount":
+			if value, parseErr := strconv.Atoi(raw); parseErr == nil {
+				cfg.LottoBarrelsCount = value
+			}
+		case "lottoTicketNumbersCount":
+			if value, parseErr := strconv.Atoi(raw); parseErr == nil {
+				cfg.LottoTicketNumbersCount = value
+			}
+		case "prizeBig":
+			if value, parseErr := strconv.ParseFloat(raw, 64); parseErr == nil {
+				cfg.PrizeBig = value
+			}
+		case "prizeMedium":
+			if value, parseErr := strconv.ParseFloat(raw, 64); parseErr == nil {
+				cfg.PrizeMedium = value
+			}
+		case "prizeSmall":
+			if value, parseErr := strconv.ParseFloat(raw, 64); parseErr == nil {
+				cfg.PrizeSmall = value
+			}
+		case "notificationsRetentionDays":
+			if value, parseErr := strconv.Atoi(raw); parseErr == nil {
+				cfg.NotificationsRetentionDays = value
+			}
+		case "auditRetentionDays":
+			if value, parseErr := strconv.Atoi(raw); parseErr == nil {
+				cfg.AuditRetentionDays = value
+			}
+		case "retentionJobIntervalMin":
+			if value, parseErr := strconv.Atoi(raw); parseErr == nil {
+				cfg.RetentionJobIntervalMin = value
+			}
+		case "standardDrawIntervalMin":
+			if value, parseErr := strconv.Atoi(raw); parseErr == nil {
+				cfg.StandardDrawIntervalMin = value
+			}
+		case "standardDrawFutureCount":
+			if value, parseErr := strconv.Atoi(raw); parseErr == nil {
+				cfg.StandardDrawFutureCount = value
+			}
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return err
+	}
+
+	if err = validateAppSettings(cfg); err != nil {
+		return err
+	}
+
+	s.setSettings(cfg)
+	return s.saveSettings(cfg)
+}
+
+func applySettingsUpdate(current AppSettings, req settingsUpdateRequest) AppSettings {
+	updated := current
+	if req.LottoDrawnNumbersCount != nil {
+		updated.LottoDrawnNumbersCount = *req.LottoDrawnNumbersCount
+	}
+	if req.LottoBarrelsCount != nil {
+		updated.LottoBarrelsCount = *req.LottoBarrelsCount
+	}
+	if req.LottoTicketNumbersCount != nil {
+		updated.LottoTicketNumbersCount = *req.LottoTicketNumbersCount
+	}
+	if req.PrizeBig != nil {
+		updated.PrizeBig = *req.PrizeBig
+	}
+	if req.PrizeMedium != nil {
+		updated.PrizeMedium = *req.PrizeMedium
+	}
+	if req.PrizeSmall != nil {
+		updated.PrizeSmall = *req.PrizeSmall
+	}
+	if req.NotificationsRetentionDays != nil {
+		updated.NotificationsRetentionDays = *req.NotificationsRetentionDays
+	}
+	if req.AuditRetentionDays != nil {
+		updated.AuditRetentionDays = *req.AuditRetentionDays
+	}
+	if req.RetentionJobIntervalMin != nil {
+		updated.RetentionJobIntervalMin = *req.RetentionJobIntervalMin
+	}
+	if req.StandardDrawIntervalMin != nil {
+		updated.StandardDrawIntervalMin = *req.StandardDrawIntervalMin
+	}
+	if req.StandardDrawFutureCount != nil {
+		updated.StandardDrawFutureCount = *req.StandardDrawFutureCount
+	}
+	return updated
+}
+
+func (s *Server) handleAdminSettings(w http.ResponseWriter, r *http.Request) {
+	admin, err := s.requireAdmin(r)
+	if err != nil {
+		status := http.StatusUnauthorized
+		if err.Error() == "forbidden" {
+			status = http.StatusForbidden
+		}
+		writeJSON(w, status, map[string]string{"error": "Forbidden"})
+		return
+	}
+
+	if r.Method == http.MethodGet {
+		writeJSON(w, http.StatusOK, map[string]any{"settings": s.getSettings()})
+		return
+	}
+	if r.Method != http.MethodPut {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "Method not allowed"})
+		return
+	}
+
+	var req settingsUpdateRequest
+	if err = readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid JSON"})
+		return
+	}
+
+	current := s.getSettings()
+	updated := applySettingsUpdate(current, req)
+	if err = validateAppSettings(updated); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	ctx := r.Context()
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "DB error"})
+		return
+	}
+	defer tx.Rollback()
+
+	if err = s.saveSettingsTx(ctx, tx, updated); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "DB error"})
+		return
+	}
+	if err = s.auditTx(ctx, tx, admin.ID, "settings.update", map[string]any{"settings": updated}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "DB error"})
+		return
+	}
+	if err = tx.Commit(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "DB error"})
+		return
+	}
+
+	s.setSettings(updated)
+	writeJSON(w, http.StatusOK, map[string]any{"settings": updated})
+}
+
 func (s *Server) withCORS(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -829,15 +1129,15 @@ func validateNumbers(numbers []int, maxNumber, numbersCount int) error {
 	return nil
 }
 
-func calculateWin(matches int) float64 {
-	if matches == lottoTicketNumbersCount {
-		return prizeBig
+func calculateWin(matches int, cfg AppSettings) float64 {
+	if matches == cfg.LottoTicketNumbersCount {
+		return cfg.PrizeBig
 	}
-	if matches == lottoTicketNumbersCount-1 {
-		return prizeMedium
+	if matches == cfg.LottoTicketNumbersCount-1 {
+		return cfg.PrizeMedium
 	}
-	if matches == lottoTicketNumbersCount-2 {
-		return prizeSmall
+	if matches == cfg.LottoTicketNumbersCount-2 {
+		return cfg.PrizeSmall
 	}
 	return 0
 }
@@ -962,8 +1262,9 @@ func (s *Server) handleCreateDraw(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name, drawAt and ticketPrice are required"})
 		return
 	}
-	req.MaxNumber = lottoBarrelsCount
-	req.NumbersCount = lottoDrawnNumbersCount
+	settings := s.getSettings()
+	req.MaxNumber = settings.LottoBarrelsCount
+	req.NumbersCount = settings.LottoDrawnNumbersCount
 	drawAt, err := time.Parse(time.RFC3339, req.DrawAt)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "drawAt must be ISO datetime"})
@@ -1054,6 +1355,7 @@ func (s *Server) handleBuyTicket(w http.ResponseWriter, r *http.Request, drawID 
 		return
 	}
 	draw.WinningNumbers = int64SliceToInt(winningNumbersRaw)
+	settings := s.getSettings()
 	if draw.Status != "scheduled" && draw.Status != "running" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Draw is not available for ticket purchase"})
 		return
@@ -1075,7 +1377,7 @@ func (s *Server) handleBuyTicket(w http.ResponseWriter, r *http.Request, drawID 
 		var ticketNumbers []int
 		var duplicateCount int
 		for attempt := 0; attempt < 50; attempt++ {
-			ticketNumbers = randomNumbers(lottoBarrelsCount, lottoTicketNumbersCount)
+			ticketNumbers = randomNumbers(settings.LottoBarrelsCount, settings.LottoTicketNumbersCount)
 			key := fmt.Sprint(ticketNumbers)
 			if usedInBatch[key] {
 				continue
@@ -1317,6 +1619,7 @@ func (s *Server) handleAdminDrawAction(w http.ResponseWriter, r *http.Request, d
 		return
 	}
 	draw.WinningNumbers = int64SliceToInt(winningNumbersRaw)
+	settings := s.getSettings()
 
 	switch action {
 	case "start":
@@ -1350,7 +1653,7 @@ func (s *Server) handleAdminDrawAction(w http.ResponseWriter, r *http.Request, d
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Draw is not running"})
 			return
 		}
-		if len(draw.WinningNumbers) >= lottoDrawnNumbersCount {
+		if len(draw.WinningNumbers) >= settings.LottoDrawnNumbersCount {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "All numbers already drawn"})
 			return
 		}
@@ -1359,7 +1662,7 @@ func (s *Server) handleAdminDrawAction(w http.ResponseWriter, r *http.Request, d
 		for _, n := range draw.WinningNumbers {
 			used[n] = true
 		}
-		for i := 1; i <= lottoBarrelsCount; i++ {
+		for i := 1; i <= settings.LottoBarrelsCount; i++ {
 			if !used[i] {
 				pool = append(pool, i)
 			}
@@ -1389,13 +1692,13 @@ func (s *Server) handleAdminDrawAction(w http.ResponseWriter, r *http.Request, d
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Draw is not running"})
 			return
 		}
-		for len(draw.WinningNumbers) < lottoDrawnNumbersCount {
+		for len(draw.WinningNumbers) < settings.LottoDrawnNumbersCount {
 			pool := make([]int, 0)
 			used := map[int]bool{}
 			for _, n := range draw.WinningNumbers {
 				used[n] = true
 			}
-			for i := 1; i <= lottoBarrelsCount; i++ {
+			for i := 1; i <= settings.LottoBarrelsCount; i++ {
 				if !used[i] {
 					pool = append(pool, i)
 				}
@@ -1445,7 +1748,7 @@ func (s *Server) handleAdminDrawAction(w http.ResponseWriter, r *http.Request, d
 					}
 				}
 			}
-			win := calculateWin(matches)
+			win := calculateWin(matches, settings)
 			status := "lost"
 			if win > 0 {
 				status = "won"
@@ -1860,6 +2163,12 @@ CREATE TABLE IF NOT EXISTS audit_events (
   details JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS app_settings (
+	key TEXT PRIMARY KEY,
+	value TEXT NOT NULL,
+	updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 `
 	_, err := db.Exec(schema)
 	if err != nil {
@@ -1945,16 +2254,17 @@ func nextSlotTime(now time.Time, interval time.Duration) time.Time {
 	return truncated.Add(interval)
 }
 
-func ensureStandardDraws(db *sql.DB) error {
-	interval := time.Duration(standardDrawIntervalMin) * time.Minute
+func (s *Server) ensureStandardDraws() error {
+	settings := s.getSettings()
+	interval := time.Duration(settings.StandardDrawIntervalMin) * time.Minute
 	next := nextSlotTime(time.Now(), interval)
 
-	for i := 0; i < standardDrawFutureCount; i++ {
+	for i := 0; i < settings.StandardDrawFutureCount; i++ {
 		slot := next.Add(time.Duration(i) * interval)
 		name := fmt.Sprintf("%s %s", standardDrawBaseName, slot.Format("15:04"))
 
 		var exists int
-		err := db.QueryRow(`
+		err := s.db.QueryRow(`
 			SELECT COUNT(*)
 			FROM draws
 			WHERE draw_at = $1 AND name = $2
@@ -1966,10 +2276,10 @@ func ensureStandardDraws(db *sql.DB) error {
 			continue
 		}
 
-		_, err = db.Exec(`
+		_, err = s.db.Exec(`
 			INSERT INTO draws (id, name, draw_at, ticket_price, max_number, numbers_count, status, winning_numbers)
 			VALUES ($1, $2, $3, 50, $4, $5, 'scheduled', $6)
-		`, uuid.NewString(), name, slot, lottoBarrelsCount, lottoDrawnNumbersCount, pq.Array([]int{}))
+		`, uuid.NewString(), name, slot, settings.LottoBarrelsCount, settings.LottoDrawnNumbersCount, pq.Array([]int{}))
 		if err != nil {
 			return err
 		}
@@ -1978,18 +2288,20 @@ func ensureStandardDraws(db *sql.DB) error {
 	return nil
 }
 
-func normalizeActiveDrawRules(db *sql.DB) error {
-	_, err := db.Exec(`
+func (s *Server) normalizeActiveDrawRules() error {
+	settings := s.getSettings()
+	_, err := s.db.Exec(`
 		UPDATE draws
 		SET max_number = $1,
 		    numbers_count = $2
 		WHERE status IN ('scheduled', 'running')
-	`, lottoBarrelsCount, lottoDrawnNumbersCount)
+	`, settings.LottoBarrelsCount, settings.LottoDrawnNumbersCount)
 	return err
 }
 
-func normalizeFinishedDrawWinningNumbers(db *sql.DB) error {
-	rows, err := db.Query(`
+func (s *Server) normalizeFinishedDrawWinningNumbers() error {
+	settings := s.getSettings()
+	rows, err := s.db.Query(`
 		SELECT id, winning_numbers
 		FROM draws
 		WHERE status = 'finished'
@@ -2012,17 +2324,17 @@ func normalizeFinishedDrawWinningNumbers(db *sql.DB) error {
 			return err
 		}
 		winning := int64SliceToInt(winningRaw)
-		if len(winning) == lottoDrawnNumbersCount {
+		if len(winning) == settings.LottoDrawnNumbersCount {
 			continue
 		}
-		used := make(map[int]bool, lottoBarrelsCount)
+		used := make(map[int]bool, settings.LottoBarrelsCount)
 		for _, n := range winning {
-			if n >= 1 && n <= lottoBarrelsCount {
+			if n >= 1 && n <= settings.LottoBarrelsCount {
 				used[n] = true
 			}
 		}
-		remaining := make([]int, 0, lottoBarrelsCount)
-		for n := 1; n <= lottoBarrelsCount; n++ {
+		remaining := make([]int, 0, settings.LottoBarrelsCount)
+		for n := 1; n <= settings.LottoBarrelsCount; n++ {
 			if !used[n] {
 				remaining = append(remaining, n)
 			}
@@ -2030,10 +2342,10 @@ func normalizeFinishedDrawWinningNumbers(db *sql.DB) error {
 		rand.Shuffle(len(remaining), func(i, j int) {
 			remaining[i], remaining[j] = remaining[j], remaining[i]
 		})
-		if len(winning) > lottoDrawnNumbersCount {
-			winning = winning[:lottoDrawnNumbersCount]
+		if len(winning) > settings.LottoDrawnNumbersCount {
+			winning = winning[:settings.LottoDrawnNumbersCount]
 		} else {
-			need := lottoDrawnNumbersCount - len(winning)
+			need := settings.LottoDrawnNumbersCount - len(winning)
 			if need > len(remaining) {
 				need = len(remaining)
 			}
@@ -2043,7 +2355,7 @@ func normalizeFinishedDrawWinningNumbers(db *sql.DB) error {
 	}
 
 	for _, item := range toFix {
-		if _, err = db.Exec(`
+		if _, err = s.db.Exec(`
 			UPDATE draws
 			SET winning_numbers = $2
 			WHERE id = $1
@@ -2055,8 +2367,9 @@ func normalizeFinishedDrawWinningNumbers(db *sql.DB) error {
 	return nil
 }
 
-func normalizeFinishedTicketResults(db *sql.DB) error {
-	_, err := db.Exec(`
+func (s *Server) normalizeFinishedTicketResults() error {
+	settings := s.getSettings()
+	_, err := s.db.Exec(`
 		WITH calc AS (
 			SELECT
 				t.id,
@@ -2083,7 +2396,7 @@ func normalizeFinishedTicketResults(db *sql.DB) error {
 			END
 		FROM calc
 		WHERE t.id = calc.id
-	`, lottoDrawnNumbersCount, lottoTicketNumbersCount-2, lottoTicketNumbersCount, prizeBig, lottoTicketNumbersCount-1, prizeMedium, lottoTicketNumbersCount-2, prizeSmall)
+	`, settings.LottoDrawnNumbersCount, settings.LottoTicketNumbersCount-2, settings.LottoTicketNumbersCount, settings.PrizeBig, settings.LottoTicketNumbersCount-1, settings.PrizeMedium, settings.LottoTicketNumbersCount-2, settings.PrizeSmall)
 	return err
 }
 
@@ -2108,30 +2421,31 @@ func normalizeWalletBalances(db *sql.DB) error {
 	return err
 }
 
-func applyRetentionPolicies(db *sql.DB) error {
-	if notificationsRetentionDays > 0 {
-		result, err := db.Exec(`
+func (s *Server) applyRetentionPolicies() error {
+	settings := s.getSettings()
+	if settings.NotificationsRetentionDays > 0 {
+		result, err := s.db.Exec(`
 			DELETE FROM notifications
 			WHERE created_at < NOW() - ($1::int * INTERVAL '1 day')
-		`, notificationsRetentionDays)
+		`, settings.NotificationsRetentionDays)
 		if err != nil {
 			return err
 		}
 		if rows, rowsErr := result.RowsAffected(); rowsErr == nil && rows > 0 {
-			log.Printf("retention: deleted %d notifications older than %d days", rows, notificationsRetentionDays)
+			log.Printf("retention: deleted %d notifications older than %d days", rows, settings.NotificationsRetentionDays)
 		}
 	}
 
-	if auditRetentionDays > 0 {
-		result, err := db.Exec(`
+	if settings.AuditRetentionDays > 0 {
+		result, err := s.db.Exec(`
 			DELETE FROM audit_events
 			WHERE created_at < NOW() - ($1::int * INTERVAL '1 day')
-		`, auditRetentionDays)
+		`, settings.AuditRetentionDays)
 		if err != nil {
 			return err
 		}
 		if rows, rowsErr := result.RowsAffected(); rowsErr == nil && rows > 0 {
-			log.Printf("retention: deleted %d audit events older than %d days", rows, auditRetentionDays)
+			log.Printf("retention: deleted %d audit events older than %d days", rows, settings.AuditRetentionDays)
 		}
 	}
 
@@ -2181,6 +2495,7 @@ func (s *Server) executeDrawAutomatically(drawID string) error {
 	ctx := context.Background()
 
 	for {
+		settings := s.getSettings()
 		tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 		if err != nil {
 			return err
@@ -2227,13 +2542,13 @@ func (s *Server) executeDrawAutomatically(drawID string) error {
 			return nil
 		}
 
-		if len(draw.WinningNumbers) < lottoDrawnNumbersCount {
+		if len(draw.WinningNumbers) < settings.LottoDrawnNumbersCount {
 			pool := make([]int, 0)
 			used := map[int]bool{}
 			for _, n := range draw.WinningNumbers {
 				used[n] = true
 			}
-			for i := 1; i <= lottoBarrelsCount; i++ {
+			for i := 1; i <= settings.LottoBarrelsCount; i++ {
 				if !used[i] {
 					pool = append(pool, i)
 				}
@@ -2307,7 +2622,7 @@ func (s *Server) executeDrawAutomatically(drawID string) error {
 				}
 			}
 
-			win := calculateWin(matches)
+			win := calculateWin(matches, settings)
 			status := "lost"
 			if win > 0 {
 				status = "won"
@@ -2361,19 +2676,19 @@ func startStandardDrawScheduler(s *Server) {
 	if err := normalizeWalletBalances(s.db); err != nil {
 		log.Printf("wallet balance normalize error: %v", err)
 	}
-	if err := normalizeActiveDrawRules(s.db); err != nil {
+	if err := s.normalizeActiveDrawRules(); err != nil {
 		log.Printf("draw rules normalize error: %v", err)
 	}
-	if err := normalizeFinishedDrawWinningNumbers(s.db); err != nil {
+	if err := s.normalizeFinishedDrawWinningNumbers(); err != nil {
 		log.Printf("draw winning normalize error: %v", err)
 	}
-	if err := normalizeFinishedTicketResults(s.db); err != nil {
+	if err := s.normalizeFinishedTicketResults(); err != nil {
 		log.Printf("ticket result normalize error: %v", err)
 	}
-	if err := ensureStandardDraws(s.db); err != nil {
+	if err := s.ensureStandardDraws(); err != nil {
 		log.Printf("standard draw init error: %v", err)
 	}
-	if err := applyRetentionPolicies(s.db); err != nil {
+	if err := s.applyRetentionPolicies(); err != nil {
 		log.Printf("retention init error: %v", err)
 	}
 	s.tryRunAutoDraws()
@@ -2383,30 +2698,36 @@ func startStandardDrawScheduler(s *Server) {
 		defer ticker.Stop()
 
 		for range ticker.C {
-			if err := normalizeActiveDrawRules(s.db); err != nil {
+			if err := s.normalizeActiveDrawRules(); err != nil {
 				log.Printf("draw rules normalize scheduler error: %v", err)
 			}
-			if err := normalizeFinishedDrawWinningNumbers(s.db); err != nil {
+			if err := s.normalizeFinishedDrawWinningNumbers(); err != nil {
 				log.Printf("draw winning normalize scheduler error: %v", err)
 			}
-			if err := normalizeFinishedTicketResults(s.db); err != nil {
+			if err := s.normalizeFinishedTicketResults(); err != nil {
 				log.Printf("ticket result normalize scheduler error: %v", err)
 			}
-			if err := ensureStandardDraws(s.db); err != nil {
+			if err := s.ensureStandardDraws(); err != nil {
 				log.Printf("standard draw scheduler error: %v", err)
 			}
 		}
 	}()
 
 	go func() {
-		interval := time.Duration(retentionJobIntervalMin) * time.Minute
-		ticker := time.NewTicker(interval)
+		ticker := time.NewTicker(1 * time.Minute)
 		defer ticker.Stop()
+		lastRun := time.Now().Add(-24 * time.Hour)
 
 		for range ticker.C {
-			if err := applyRetentionPolicies(s.db); err != nil {
+			settings := s.getSettings()
+			interval := time.Duration(settings.RetentionJobIntervalMin) * time.Minute
+			if time.Since(lastRun) < interval {
+				continue
+			}
+			if err := s.applyRetentionPolicies(); err != nil {
 				log.Printf("retention scheduler error: %v", err)
 			}
+			lastRun = time.Now()
 		}
 	}()
 
@@ -2449,6 +2770,9 @@ func main() {
 	}
 
 	srv := newServer(db, secret)
+	if err = srv.loadSettingsFromDB(); err != nil {
+		log.Fatal(err)
+	}
 	startStandardDrawScheduler(srv)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", srv.withCORS(method(http.MethodGet, srv.handleHealth)))
@@ -2464,6 +2788,7 @@ func main() {
 	mux.HandleFunc("/api/draws/", srv.withCORS(srv.drawActionRouter))
 	mux.HandleFunc("/api/my/tickets", srv.withCORS(method(http.MethodGet, srv.handleMyTickets)))
 	mux.HandleFunc("/api/notifications", srv.withCORS(method(http.MethodGet, srv.handleNotifications)))
+	mux.HandleFunc("/api/admin/settings", srv.withCORS(srv.handleAdminSettings))
 	mux.HandleFunc("/api/admin/reports", srv.withCORS(method(http.MethodGet, srv.handleAdminReports)))
 	mux.HandleFunc("/api/admin/reports/pdf", srv.withCORS(method(http.MethodGet, srv.handleAdminReportsPDF)))
 	mux.HandleFunc("/ws", srv.handleWS)

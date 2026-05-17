@@ -149,6 +149,8 @@ BASE_URL=https://loto.koshsky.ru k6 run docs/load/k6_ws_stream.js
 - `POST /api/draws/:drawId/admin/start`
 - `POST /api/draws/:drawId/admin/next-number`
 - `POST /api/draws/:drawId/admin/finish`
+- `GET /api/admin/settings`
+- `PUT /api/admin/settings`
 - `GET /api/admin/reports`
 - `GET /api/admin/reports/pdf`
 
