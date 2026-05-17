@@ -332,6 +332,20 @@ nav,
   margin-bottom: 16px;
 }
 
+.settings-group {
+  margin: 0 0 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.settings-group legend {
+  padding: 0 8px;
+  font-family: "Unbounded", sans-serif;
+  font-size: 14px;
+}
+
 .admin-settings-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));

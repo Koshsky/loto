@@ -42,17 +42,18 @@ type Wallet struct {
 }
 
 type Draw struct {
-	ID             string  `json:"id"`
-	Name           string  `json:"name"`
-	DrawAt         string  `json:"drawAt"`
-	TicketPrice    float64 `json:"ticketPrice"`
-	MaxNumber      int     `json:"maxNumber"`
-	NumbersCount   int     `json:"numbersCount"`
-	Status         string  `json:"status"`
-	WinningNumbers []int   `json:"winningNumbers"`
-	CreatedAt      string  `json:"createdAt"`
-	StartedAt      string  `json:"startedAt,omitempty"`
-	FinishedAt     string  `json:"finishedAt,omitempty"`
+	ID                 string  `json:"id"`
+	Name               string  `json:"name"`
+	DrawAt             string  `json:"drawAt"`
+	TicketPrice        float64 `json:"ticketPrice"`
+	TicketNumbersCount int     `json:"ticketNumbersCount"`
+	MaxNumber          int     `json:"maxNumber"`
+	NumbersCount       int     `json:"numbersCount"`
+	Status             string  `json:"status"`
+	WinningNumbers     []int   `json:"winningNumbers"`
+	CreatedAt          string  `json:"createdAt"`
+	StartedAt          string  `json:"startedAt,omitempty"`
+	FinishedAt         string  `json:"finishedAt,omitempty"`
 }
 
 type Ticket struct {
@@ -126,6 +127,7 @@ type AppSettings struct {
 	LottoDrawnNumbersCount     int     `json:"lottoDrawnNumbersCount"`
 	LottoBarrelsCount          int     `json:"lottoBarrelsCount"`
 	LottoTicketNumbersCount    int     `json:"lottoTicketNumbersCount"`
+	StandardDrawTicketPrice    float64 `json:"standardDrawTicketPrice"`
 	PrizeBig                   float64 `json:"prizeBig"`
 	PrizeMedium                float64 `json:"prizeMedium"`
 	PrizeSmall                 float64 `json:"prizeSmall"`
@@ -140,6 +142,7 @@ type settingsUpdateRequest struct {
 	LottoDrawnNumbersCount     *int     `json:"lottoDrawnNumbersCount"`
 	LottoBarrelsCount          *int     `json:"lottoBarrelsCount"`
 	LottoTicketNumbersCount    *int     `json:"lottoTicketNumbersCount"`
+	StandardDrawTicketPrice    *float64 `json:"standardDrawTicketPrice"`
 	PrizeBig                   *float64 `json:"prizeBig"`
 	PrizeMedium                *float64 `json:"prizeMedium"`
 	PrizeSmall                 *float64 `json:"prizeSmall"`
@@ -165,6 +168,7 @@ const (
 	defaultDrawnNumbersCount    = 18
 	defaultLottoBarrelsCount    = 36
 	defaultTicketNumbersCount   = 5
+	defaultStandardDrawPrice    = 50.0
 	defaultPrizeBig             = 5000.0
 	defaultPrizeMedium          = 1000.0
 	defaultPrizeSmall           = 100.0
@@ -232,6 +236,7 @@ func defaultAppSettings() AppSettings {
 		LottoDrawnNumbersCount:     mustEnvInt("LOTTO_DRAWN_NUMBERS_COUNT", defaultDrawnNumbersCount),
 		LottoBarrelsCount:          defaultLottoBarrelsCount,
 		LottoTicketNumbersCount:    defaultTicketNumbersCount,
+		StandardDrawTicketPrice:    mustEnvFloat("STANDARD_DRAW_TICKET_PRICE", defaultStandardDrawPrice),
 		PrizeBig:                   mustEnvFloat("LOTTO_PRIZE_5_MATCHES", defaultPrizeBig),
 		PrizeMedium:                mustEnvFloat("LOTTO_PRIZE_4_MATCHES", defaultPrizeMedium),
 		PrizeSmall:                 mustEnvFloat("LOTTO_PRIZE_3_MATCHES", defaultPrizeSmall),
@@ -427,6 +432,9 @@ func validateAppSettings(cfg AppSettings) error {
 	if cfg.LottoTicketNumbersCount < 3 || cfg.LottoTicketNumbersCount > cfg.LottoBarrelsCount {
 		return errors.New("lottoTicketNumbersCount must be between 3 and lottoBarrelsCount")
 	}
+	if cfg.StandardDrawTicketPrice < 0 {
+		return errors.New("standardDrawTicketPrice must be greater than or equal to 0")
+	}
 	if cfg.LottoDrawnNumbersCount < cfg.LottoTicketNumbersCount || cfg.LottoDrawnNumbersCount > cfg.LottoBarrelsCount {
 		return errors.New("lottoDrawnNumbersCount must be between lottoTicketNumbersCount and lottoBarrelsCount")
 	}
@@ -456,6 +464,7 @@ func settingsToDBMap(cfg AppSettings) map[string]string {
 		"lottoDrawnNumbersCount":     strconv.Itoa(cfg.LottoDrawnNumbersCount),
 		"lottoBarrelsCount":          strconv.Itoa(cfg.LottoBarrelsCount),
 		"lottoTicketNumbersCount":    strconv.Itoa(cfg.LottoTicketNumbersCount),
+		"standardDrawTicketPrice":    strconv.FormatFloat(cfg.StandardDrawTicketPrice, 'f', 2, 64),
 		"prizeBig":                   strconv.FormatFloat(cfg.PrizeBig, 'f', 2, 64),
 		"prizeMedium":                strconv.FormatFloat(cfg.PrizeMedium, 'f', 2, 64),
 		"prizeSmall":                 strconv.FormatFloat(cfg.PrizeSmall, 'f', 2, 64),
@@ -579,6 +588,9 @@ func applySettingsUpdate(current AppSettings, req settingsUpdateRequest) AppSett
 	}
 	if req.LottoTicketNumbersCount != nil {
 		updated.LottoTicketNumbersCount = *req.LottoTicketNumbersCount
+	}
+	if req.StandardDrawTicketPrice != nil {
+		updated.StandardDrawTicketPrice = *req.StandardDrawTicketPrice
 	}
 	if req.PrizeBig != nil {
 		updated.PrizeBig = *req.PrizeBig
@@ -1185,6 +1197,13 @@ func (s *Server) mapDraw(rows Scanner) (*Draw, error) {
 	return &d, nil
 }
 
+func (s *Server) decorateDraw(draw *Draw) {
+	if draw == nil {
+		return
+	}
+	draw.TicketNumbersCount = s.getSettings().LottoTicketNumbersCount
+}
+
 type Scanner interface {
 	Scan(dest ...any) error
 }
@@ -1232,6 +1251,7 @@ func (s *Server) handleDraws(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "DB error"})
 			return
 		}
+		s.decorateDraw(d)
 		draws = append(draws, *d)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"draws": draws})
@@ -1306,6 +1326,7 @@ func (s *Server) handleCreateDraw(w http.ResponseWriter, r *http.Request) {
 	draw.Name = req.Name
 	draw.DrawAt = toISO(drawAt)
 	draw.TicketPrice = round2(req.TicketPrice)
+	s.decorateDraw(&draw)
 	draw.MaxNumber = req.MaxNumber
 	draw.NumbersCount = req.NumbersCount
 	draw.Status = "scheduled"
@@ -1639,6 +1660,7 @@ func (s *Server) handleAdminDrawAction(w http.ResponseWriter, r *http.Request, d
 		}
 		draw.Status = "running"
 		draw.StartedAt = toISO(startedAt.Time)
+		s.decorateDraw(&draw)
 		_ = s.auditTx(ctx, tx, admin.ID, "draw.start", map[string]any{"drawId": drawID})
 		if err = tx.Commit(); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "DB error"})
@@ -1669,6 +1691,7 @@ func (s *Server) handleAdminDrawAction(w http.ResponseWriter, r *http.Request, d
 		}
 		nextNumber := pool[rand.Intn(len(pool))]
 		draw.WinningNumbers = append(draw.WinningNumbers, nextNumber)
+		s.decorateDraw(&draw)
 		_, err = tx.ExecContext(ctx, `
 			UPDATE draws
 			SET winning_numbers = $2
@@ -1781,6 +1804,7 @@ func (s *Server) handleAdminDrawAction(w http.ResponseWriter, r *http.Request, d
 		}
 		draw.Status = "finished"
 		draw.FinishedAt = toISO(finishedAt.Time)
+		s.decorateDraw(&draw)
 		_ = s.auditTx(ctx, tx, admin.ID, "draw.finish", map[string]any{"drawId": drawID})
 		if err = tx.Commit(); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "DB error"})
@@ -2279,7 +2303,7 @@ func (s *Server) ensureStandardDraws() error {
 		_, err = s.db.Exec(`
 			INSERT INTO draws (id, name, draw_at, ticket_price, max_number, numbers_count, status, winning_numbers)
 			VALUES ($1, $2, $3, 50, $4, $5, 'scheduled', $6)
-		`, uuid.NewString(), name, slot, settings.LottoBarrelsCount, settings.LottoDrawnNumbersCount, pq.Array([]int{}))
+		`, uuid.NewString(), name, slot, settings.StandardDrawTicketPrice, settings.LottoBarrelsCount, settings.LottoDrawnNumbersCount, pq.Array([]int{}))
 		if err != nil {
 			return err
 		}
@@ -2293,9 +2317,10 @@ func (s *Server) normalizeActiveDrawRules() error {
 	_, err := s.db.Exec(`
 		UPDATE draws
 		SET max_number = $1,
-		    numbers_count = $2
+		    numbers_count = $2,
+		    ticket_price = CASE WHEN name LIKE $3 THEN $4 ELSE ticket_price END
 		WHERE status IN ('scheduled', 'running')
-	`, settings.LottoBarrelsCount, settings.LottoDrawnNumbersCount)
+	`, settings.LottoBarrelsCount, settings.LottoDrawnNumbersCount, standardDrawBaseName+"%", settings.StandardDrawTicketPrice)
 	return err
 }
 

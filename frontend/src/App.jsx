@@ -67,8 +67,9 @@ function normalizeWallet(wallet) {
 function normalizeAdminSettings(settings) {
   return {
     lottoDrawnNumbersCount: toSafeNumber(settings?.lottoDrawnNumbersCount, 18),
-    lottoBarrelsCount: toSafeNumber(settings?.lottoBarrelsCount, 36),
+    lottoBarrelsCount: toSafeNumber(settings?.lottoBarrelsCount, 99),
     lottoTicketNumbersCount: toSafeNumber(settings?.lottoTicketNumbersCount, 5),
+    standardDrawTicketPrice: toSafeNumber(settings?.standardDrawTicketPrice, 50),
     prizeBig: toSafeNumber(settings?.prizeBig, 5000),
     prizeMedium: toSafeNumber(settings?.prizeMedium, 1000),
     prizeSmall: toSafeNumber(settings?.prizeSmall, 100),
@@ -521,6 +522,7 @@ export default function App() {
         lottoDrawnNumbersCount: Number(settingsForm.lottoDrawnNumbersCount),
         lottoBarrelsCount: Number(settingsForm.lottoBarrelsCount),
         lottoTicketNumbersCount: Number(settingsForm.lottoTicketNumbersCount),
+        standardDrawTicketPrice: Number(settingsForm.standardDrawTicketPrice),
         prizeBig: Number(settingsForm.prizeBig),
         prizeMedium: Number(settingsForm.prizeMedium),
         prizeSmall: Number(settingsForm.prizeSmall),
@@ -647,7 +649,7 @@ export default function App() {
                   <p>Время тиража: {new Date(draw.drawAt).toLocaleString()}</p>
                   <p>Статус: {draw.status}</p>
                   <p>Цена билета: {draw.ticketPrice}</p>
-                  <p>Формат билета: 5 из {draw.numbersCount}</p>
+                  <p>Формат билета: {draw.ticketNumbersCount || 5} из {draw.numbersCount}</p>
                   <p>Выигрышные: {winningNumbers.join(", ") || "-"}</p>
                   {draw.status !== "finished" && (
                     <>
@@ -772,112 +774,145 @@ export default function App() {
           <section>
             <h2>Администрирование</h2>
 
-            <h3>Параметры системы</h3>
             <form className="admin-form admin-settings-form" onSubmit={saveAdminSettings}>
-              <div className="admin-settings-grid">
-                <label>
-                  Выпавших чисел в тираже
-                  <input
-                    type="number"
-                    min="3"
-                    value={settingsForm.lottoDrawnNumbersCount}
-                    onChange={(e) => setSettingsForm((prev) => ({ ...prev, lottoDrawnNumbersCount: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Количество бочонков
-                  <input
-                    type="number"
-                    min="5"
-                    value={settingsForm.lottoBarrelsCount}
-                    onChange={(e) => setSettingsForm((prev) => ({ ...prev, lottoBarrelsCount: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Чисел в билете
-                  <input
-                    type="number"
-                    min="3"
-                    value={settingsForm.lottoTicketNumbersCount}
-                    onChange={(e) => setSettingsForm((prev) => ({ ...prev, lottoTicketNumbersCount: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Приз за максимум совпадений
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={settingsForm.prizeBig}
-                    onChange={(e) => setSettingsForm((prev) => ({ ...prev, prizeBig: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Приз за -1 совпадение
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={settingsForm.prizeMedium}
-                    onChange={(e) => setSettingsForm((prev) => ({ ...prev, prizeMedium: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Приз за -2 совпадения
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={settingsForm.prizeSmall}
-                    onChange={(e) => setSettingsForm((prev) => ({ ...prev, prizeSmall: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Хранение уведомлений (дней)
-                  <input
-                    type="number"
-                    min="0"
-                    value={settingsForm.notificationsRetentionDays}
-                    onChange={(e) => setSettingsForm((prev) => ({ ...prev, notificationsRetentionDays: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Хранение аудита (дней)
-                  <input
-                    type="number"
-                    min="0"
-                    value={settingsForm.auditRetentionDays}
-                    onChange={(e) => setSettingsForm((prev) => ({ ...prev, auditRetentionDays: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Интервал retention-задачи (мин)
-                  <input
-                    type="number"
-                    min="1"
-                    value={settingsForm.retentionJobIntervalMin}
-                    onChange={(e) => setSettingsForm((prev) => ({ ...prev, retentionJobIntervalMin: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Интервал стандартных тиражей (мин)
-                  <input
-                    type="number"
-                    min="1"
-                    value={settingsForm.standardDrawIntervalMin}
-                    onChange={(e) => setSettingsForm((prev) => ({ ...prev, standardDrawIntervalMin: e.target.value }))}
-                  />
-                </label>
-                <label>
-                  Количество будущих стандартных тиражей
-                  <input
-                    type="number"
-                    min="1"
-                    value={settingsForm.standardDrawFutureCount}
-                    onChange={(e) => setSettingsForm((prev) => ({ ...prev, standardDrawFutureCount: e.target.value }))}
-                  />
-                </label>
-              </div>
+              <fieldset className="settings-group">
+                <legend>Стандартный тираж</legend>
+                <div className="admin-settings-grid">
+                  <label>
+                    Стоимость стандартного тиража
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={settingsForm.standardDrawTicketPrice}
+                      onChange={(e) => setSettingsForm((prev) => ({ ...prev, standardDrawTicketPrice: e.target.value }))}
+                    />
+                  </label>
+                  <label>
+                    Интервал стандартных тиражей (мин)
+                    <input
+                      type="number"
+                      min="1"
+                      value={settingsForm.standardDrawIntervalMin}
+                      onChange={(e) => setSettingsForm((prev) => ({ ...prev, standardDrawIntervalMin: e.target.value }))}
+                    />
+                  </label>
+                  <label>
+                    Количество будущих стандартных тиражей
+                    <input
+                      type="number"
+                      min="1"
+                      value={settingsForm.standardDrawFutureCount}
+                      onChange={(e) => setSettingsForm((prev) => ({ ...prev, standardDrawFutureCount: e.target.value }))}
+                    />
+                  </label>
+                </div>
+              </fieldset>
+
+              <fieldset className="settings-group">
+                <legend>Системные настройки</legend>
+                <div className="admin-settings-grid">
+                  <label>
+                    Выпавших чисел в тираже
+                    <input
+                      type="number"
+                      min="3"
+                      value={settingsForm.lottoDrawnNumbersCount}
+                      onChange={(e) => setSettingsForm((prev) => ({ ...prev, lottoDrawnNumbersCount: e.target.value }))}
+                    />
+                  </label>
+                  <label>
+                    Количество бочонков
+                    <input
+                      type="number"
+                      min="1"
+                      max="99"
+                      value={settingsForm.lottoBarrelsCount}
+                      onChange={(e) => setSettingsForm((prev) => ({ ...prev, lottoBarrelsCount: e.target.value }))}
+                    />
+                  </label>
+                  <label>
+                    Чисел в билете
+                    <input
+                      type="number"
+                      min="3"
+                      value={settingsForm.lottoTicketNumbersCount}
+                      onChange={(e) => setSettingsForm((prev) => ({ ...prev, lottoTicketNumbersCount: e.target.value }))}
+                    />
+                  </label>
+                </div>
+              </fieldset>
+
+              <fieldset className="settings-group">
+                <legend>Призы</legend>
+                <div className="admin-settings-grid">
+                  <label>
+                    Приз за максимум совпадений
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={settingsForm.prizeBig}
+                      onChange={(e) => setSettingsForm((prev) => ({ ...prev, prizeBig: e.target.value }))}
+                    />
+                  </label>
+                  <label>
+                    Приз за -1 совпадение
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={settingsForm.prizeMedium}
+                      onChange={(e) => setSettingsForm((prev) => ({ ...prev, prizeMedium: e.target.value }))}
+                    />
+                  </label>
+                  <label>
+                    Приз за -2 совпадения
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={settingsForm.prizeSmall}
+                      onChange={(e) => setSettingsForm((prev) => ({ ...prev, prizeSmall: e.target.value }))}
+                    />
+                  </label>
+                </div>
+              </fieldset>
+
+              <fieldset className="settings-group">
+                <legend>Хранение данных</legend>
+                <div className="admin-settings-grid">
+                  <label>
+                    Хранение уведомлений (дней)
+                    <input
+                      type="number"
+                      min="0"
+                      value={settingsForm.notificationsRetentionDays}
+                      onChange={(e) => setSettingsForm((prev) => ({ ...prev, notificationsRetentionDays: e.target.value }))}
+                    />
+                  </label>
+                  <label>
+                    Хранение аудита (дней)
+                    <input
+                      type="number"
+                      min="0"
+                      value={settingsForm.auditRetentionDays}
+                      onChange={(e) => setSettingsForm((prev) => ({ ...prev, auditRetentionDays: e.target.value }))}
+                    />
+                  </label>
+                  <label>
+                    Интервал retention-задачи (мин)
+                    <input
+                      type="number"
+                      min="1"
+                      value={settingsForm.retentionJobIntervalMin}
+                      onChange={(e) => setSettingsForm((prev) => ({ ...prev, retentionJobIntervalMin: e.target.value }))}
+                    />
+                    <span className="hint">Как часто backend запускает очистку старых уведомлений и записей аудита.</span>
+                  </label>
+                </div>
+              </fieldset>
+
               <button type="submit" disabled={isSavingSettings}>
                 {isSavingSettings ? "Сохранение..." : "Сохранить параметры"}
               </button>
