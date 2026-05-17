@@ -575,7 +575,6 @@ export default function App() {
           <button className="link-btn" onClick={() => setAuthMode(authMode === "login" ? "register" : "login")}>
             {authMode === "login" ? "Нет аккаунта? Регистрация" : "Есть аккаунт? Вход"}
           </button>
-          <p className="hint">Тест-админ: admin@loto.local / admin123</p>
           {error && <p className="error">{error}</p>}
         </div>
       </div>
