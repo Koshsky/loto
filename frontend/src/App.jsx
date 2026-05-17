@@ -118,7 +118,7 @@ export default function App() {
   const [showInsufficientToast, setShowInsufficientToast] = useState(false);
   const [drawCreateToastMessage, setDrawCreateToastMessage] = useState("");
 
-  const [authForm, setAuthForm] = useState({ email: "", password: "", name: "" });
+  const [authForm, setAuthForm] = useState({ email: "", password: "", passwordConfirm: "", name: "" });
   const [amount, setAmount] = useState(100);
   const [buyCounts, setBuyCounts] = useState({});
   const [drawForm, setDrawForm] = useState({
@@ -404,10 +404,19 @@ export default function App() {
     event.preventDefault();
     setError("");
     try {
+      if (authMode === "register" && authForm.password !== authForm.passwordConfirm) {
+        setError("Пароли не совпадают");
+        return;
+      }
+
       const result =
         authMode === "login"
           ? await api.login({ email: authForm.email, password: authForm.password })
-          : await api.register(authForm);
+          : await api.register({
+              email: authForm.email,
+              password: authForm.password,
+              name: authForm.name
+            });
 
       localStorage.setItem("token", result.token);
       localStorage.setItem("user", JSON.stringify(result.user));
@@ -550,7 +559,7 @@ export default function App() {
       <div className="auth-page">
         <div className="auth-card">
           <h1>Loto</h1>
-          <p>Онлайн-лото с фейковым балансом и тиражами.</p>
+          <p>Онлайн-лото с тиражами в реальном времени.</p>
           <form onSubmit={submitAuth}>
             {authMode === "register" && (
               <input
@@ -570,6 +579,14 @@ export default function App() {
               value={authForm.password}
               onChange={(e) => setAuthForm((prev) => ({ ...prev, password: e.target.value }))}
             />
+            {authMode === "register" && (
+              <input
+                type="password"
+                placeholder="Подтвердите пароль"
+                value={authForm.passwordConfirm}
+                onChange={(e) => setAuthForm((prev) => ({ ...prev, passwordConfirm: e.target.value }))}
+              />
+            )}
             <button type="submit">{authMode === "login" ? i18n.actions.login : i18n.actions.register}</button>
           </form>
           <button className="link-btn" onClick={() => setAuthMode(authMode === "login" ? "register" : "login")}>

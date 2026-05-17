@@ -79,6 +79,13 @@ button:hover {
   color: var(--brand-dark);
   border-color: transparent;
   margin-top: 8px;
+  transition: box-shadow 0.2s ease, transform 0.15s ease;
+}
+
+.link-btn:hover {
+  background: transparent;
+  color: var(--brand-dark);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
 }
 
 .ghost-button {
