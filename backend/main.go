@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -19,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-pdf/fpdf"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -1539,6 +1541,159 @@ func (s *Server) handleNotifications(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"notifications": list})
 }
 
+func makeASCIIText(input string) string {
+	b := strings.Builder{}
+	b.Grow(len(input))
+	for _, r := range input {
+		if r == '\n' || r == '\r' || r == '\t' || (r >= 32 && r <= 126) {
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteRune('?')
+	}
+	return b.String()
+}
+
+func (s *Server) collectAdminReport() (map[string]any, []AuditEvent, error) {
+	var sales, payouts float64
+	if err := s.db.QueryRow(`
+		SELECT COALESCE(SUM(-amount), 0)
+		FROM wallet_transactions
+		WHERE type = 'ticket_purchase'
+	`).Scan(&sales); err != nil {
+		return nil, nil, err
+	}
+	if err := s.db.QueryRow(`
+		SELECT COALESCE(SUM(amount), 0)
+		FROM wallet_transactions
+		WHERE type = 'winning_credit'
+	`).Scan(&payouts); err != nil {
+		return nil, nil, err
+	}
+
+	var drawsCount, ticketsCount int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM draws`).Scan(&drawsCount); err != nil {
+		return nil, nil, err
+	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM tickets`).Scan(&ticketsCount); err != nil {
+		return nil, nil, err
+	}
+
+	rows, err := s.db.Query(`
+		SELECT id, actor_user_id, action, details, created_at
+		FROM audit_events
+		ORDER BY created_at DESC
+		LIMIT 100
+	`)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+
+	audit := []AuditEvent{}
+	for rows.Next() {
+		var item AuditEvent
+		var detailsRaw []byte
+		var createdAt time.Time
+		if err = rows.Scan(&item.ID, &item.ActorUserID, &item.Action, &detailsRaw, &createdAt); err != nil {
+			return nil, nil, err
+		}
+		_ = json.Unmarshal(detailsRaw, &item.Details)
+		item.CreatedAt = toISO(createdAt)
+		audit = append(audit, item)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, nil, err
+	}
+
+	kpi := map[string]any{
+		"sales":   round2(sales),
+		"payouts": round2(payouts),
+		"margin":  round2(sales - payouts),
+		"draws":   drawsCount,
+		"tickets": ticketsCount,
+	}
+
+	return kpi, audit, nil
+}
+
+func buildAdminReportPDF(kpi map[string]any, audit []AuditEvent) ([]byte, error) {
+	pdf := fpdf.New("P", "mm", "A4", "")
+	pdf.SetMargins(14, 14, 14)
+	pdf.SetAutoPageBreak(true, 14)
+	pdf.AddPage()
+
+	pdf.SetFont("Arial", "B", 16)
+	pdf.CellFormat(0, 10, "Loto Admin Report", "", 1, "L", false, 0, "")
+
+	pdf.SetFont("Arial", "", 11)
+	pdf.CellFormat(0, 7, makeASCIIText("Generated at: "+nowISO()), "", 1, "L", false, 0, "")
+	pdf.Ln(2)
+
+	pdf.SetFont("Arial", "B", 12)
+	pdf.CellFormat(0, 8, "KPI", "", 1, "L", false, 0, "")
+	pdf.SetFont("Arial", "", 11)
+	pdf.CellFormat(0, 7, fmt.Sprintf("Sales: %.2f", toSafeFloat64(kpi["sales"])), "", 1, "L", false, 0, "")
+	pdf.CellFormat(0, 7, fmt.Sprintf("Payouts: %.2f", toSafeFloat64(kpi["payouts"])), "", 1, "L", false, 0, "")
+	pdf.CellFormat(0, 7, fmt.Sprintf("Margin: %.2f", toSafeFloat64(kpi["margin"])), "", 1, "L", false, 0, "")
+	pdf.CellFormat(0, 7, fmt.Sprintf("Draws: %d", toSafeInt(kpi["draws"])), "", 1, "L", false, 0, "")
+	pdf.CellFormat(0, 7, fmt.Sprintf("Tickets: %d", toSafeInt(kpi["tickets"])), "", 1, "L", false, 0, "")
+	pdf.Ln(3)
+
+	pdf.SetFont("Arial", "B", 12)
+	pdf.CellFormat(0, 8, "Recent Audit", "", 1, "L", false, 0, "")
+	pdf.SetFont("Arial", "", 10)
+
+	limit := len(audit)
+	if limit > 30 {
+		limit = 30
+	}
+	for i := 0; i < limit; i++ {
+		item := audit[i]
+		detailsRaw, _ := json.Marshal(item.Details)
+		line := fmt.Sprintf("%s | %s | actor=%s | %s", item.CreatedAt, item.Action, item.ActorUserID, string(detailsRaw))
+		pdf.MultiCell(0, 6, makeASCIIText(line), "", "L", false)
+	}
+
+	if limit == 0 {
+		pdf.MultiCell(0, 6, "No audit events found.", "", "L", false)
+	}
+
+	var out bytes.Buffer
+	if err := pdf.Output(&out); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}
+
+func toSafeFloat64(value any) float64 {
+	switch v := value.(type) {
+	case float64:
+		return v
+	case float32:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	default:
+		return 0
+	}
+}
+
+func toSafeInt(value any) int {
+	switch v := value.(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	default:
+		return 0
+	}
+}
+
 func (s *Server) handleAdminReports(w http.ResponseWriter, r *http.Request) {
 	_, err := s.requireAdmin(r)
 	if err != nil {
@@ -1549,57 +1704,46 @@ func (s *Server) handleAdminReports(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, status, map[string]string{"error": "Forbidden"})
 		return
 	}
-	var sales, payouts float64
-	_ = s.db.QueryRow(`
-		SELECT COALESCE(SUM(-amount), 0)
-		FROM wallet_transactions
-		WHERE type = 'ticket_purchase'
-	`).Scan(&sales)
-	_ = s.db.QueryRow(`
-		SELECT COALESCE(SUM(amount), 0)
-		FROM wallet_transactions
-		WHERE type = 'winning_credit'
-	`).Scan(&payouts)
-
-	var drawsCount, ticketsCount int
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM draws`).Scan(&drawsCount)
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM tickets`).Scan(&ticketsCount)
-
-	rows, err := s.db.Query(`
-		SELECT id, actor_user_id, action, details, created_at
-		FROM audit_events
-		ORDER BY created_at DESC
-		LIMIT 100
-	`)
+	kpi, audit, err := s.collectAdminReport()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "DB error"})
 		return
 	}
-	defer rows.Close()
-	audit := []AuditEvent{}
-	for rows.Next() {
-		var item AuditEvent
-		var detailsRaw []byte
-		var createdAt time.Time
-		if err = rows.Scan(&item.ID, &item.ActorUserID, &item.Action, &detailsRaw, &createdAt); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "DB error"})
-			return
-		}
-		_ = json.Unmarshal(detailsRaw, &item.Details)
-		item.CreatedAt = toISO(createdAt)
-		audit = append(audit, item)
-	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"kpi": map[string]any{
-			"sales":   round2(sales),
-			"payouts": round2(payouts),
-			"margin":  round2(sales - payouts),
-			"draws":   drawsCount,
-			"tickets": ticketsCount,
-		},
+		"kpi":         kpi,
 		"recentAudit": audit,
 	})
+}
+
+func (s *Server) handleAdminReportsPDF(w http.ResponseWriter, r *http.Request) {
+	_, err := s.requireAdmin(r)
+	if err != nil {
+		status := http.StatusUnauthorized
+		if err.Error() == "forbidden" {
+			status = http.StatusForbidden
+		}
+		writeJSON(w, status, map[string]string{"error": "Forbidden"})
+		return
+	}
+
+	kpi, audit, err := s.collectAdminReport()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "DB error"})
+		return
+	}
+
+	pdfBytes, err := buildAdminReportPDF(kpi, audit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to generate PDF"})
+		return
+	}
+
+	filename := fmt.Sprintf("admin-report-%s.pdf", time.Now().UTC().Format("20060102-150405"))
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(pdfBytes)
 }
 
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
@@ -2321,6 +2465,7 @@ func main() {
 	mux.HandleFunc("/api/my/tickets", srv.withCORS(method(http.MethodGet, srv.handleMyTickets)))
 	mux.HandleFunc("/api/notifications", srv.withCORS(method(http.MethodGet, srv.handleNotifications)))
 	mux.HandleFunc("/api/admin/reports", srv.withCORS(method(http.MethodGet, srv.handleAdminReports)))
+	mux.HandleFunc("/api/admin/reports/pdf", srv.withCORS(method(http.MethodGet, srv.handleAdminReportsPDF)))
 	mux.HandleFunc("/ws", srv.handleWS)
 	mux.HandleFunc("/", srv.withCORS(func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Not found"})

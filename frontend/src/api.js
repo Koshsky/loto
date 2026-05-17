@@ -29,6 +29,39 @@ async function request(path, { method = "GET", body, token } = {}) {
   return data;
 }
 
+function parseFilenameFromDisposition(disposition) {
+  if (!disposition) return null;
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    try {
+      return decodeURIComponent(utf8Match[1]);
+    } catch {
+      return utf8Match[1];
+    }
+  }
+  const plainMatch = disposition.match(/filename="?([^";]+)"?/i);
+  return plainMatch?.[1] || null;
+}
+
+async function requestFile(path, { method = "GET", token } = {}) {
+  const response = await fetch(`${API_URL}${path}`, {
+    method,
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    }
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.error || "Request failed");
+  }
+
+  return {
+    blob: await response.blob(),
+    filename: parseFilenameFromDisposition(response.headers.get("Content-Disposition"))
+  };
+}
+
 export const api = {
   login: (payload) => request("/api/auth/login", { method: "POST", body: payload }),
   register: (payload) => request("/api/auth/register", { method: "POST", body: payload }),
@@ -45,7 +78,8 @@ export const api = {
   startDraw: (token, drawId) => request(`/api/draws/${drawId}/admin/start`, { method: "POST", token }),
   nextNumber: (token, drawId) => request(`/api/draws/${drawId}/admin/next-number`, { method: "POST", token }),
   finishDraw: (token, drawId) => request(`/api/draws/${drawId}/admin/finish`, { method: "POST", token }),
-  reports: (token) => request("/api/admin/reports", { token })
+  reports: (token) => request("/api/admin/reports", { token }),
+  reportsPdf: (token) => requestFile("/api/admin/reports/pdf", { token })
 };
 
 export function createDrawStream(onMessage, onStatus) {

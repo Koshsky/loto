@@ -92,6 +92,7 @@ export default function App() {
   const [tickets, setTickets] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [report, setReport] = useState(null);
+  const [isDownloadingReport, setIsDownloadingReport] = useState(false);
   const [purchaseReceipt, setPurchaseReceipt] = useState(null);
   const [selectedTicket, setSelectedTicket] = useState(null);
   const [showInsufficientToast, setShowInsufficientToast] = useState(false);
@@ -452,6 +453,28 @@ export default function App() {
     }
   }
 
+  async function downloadReportPdf() {
+    try {
+      setError("");
+      setIsDownloadingReport(true);
+      const result = await api.reportsPdf(token);
+      const fallbackName = `admin-report-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.pdf`;
+      const filename = result?.filename || fallbackName;
+      const blobUrl = URL.createObjectURL(result.blob);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(blobUrl);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsDownloadingReport(false);
+    }
+  }
+
   if (!token || !user) {
     return (
       <div className="auth-page">
@@ -716,6 +739,11 @@ export default function App() {
             {report && (
               <>
                 <h3>KPI</h3>
+                <div className="admin-report-actions">
+                  <button onClick={downloadReportPdf} disabled={isDownloadingReport}>
+                    {isDownloadingReport ? "Формируется PDF..." : "Скачать отчет в PDF"}
+                  </button>
+                </div>
                 <p>
                   Продажи: {report.kpi.sales} | Выплаты: {report.kpi.payouts} | Маржа: {report.kpi.margin} |
                   Тиражей: {report.kpi.draws} | Билетов: {report.kpi.tickets}
