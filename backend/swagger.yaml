@@ -1,0 +1,367 @@
+openapi: 3.0.0
+info:
+  title: Loto Backend API
+  version: 1.0.0
+  description: |
+    REST API для онлайн-лотереи. Все ответы и запросы в формате JSON. Аутентификация через JWT (Bearer).
+servers:
+  - url: /api
+paths:
+  /health:
+    get:
+      summary: Проверка статуса сервера
+      responses:
+        '200':
+          description: OK
+  /metrics:
+    get:
+      summary: Метрики работы сервера
+      responses:
+        '200':
+          description: OK
+  /auth/register:
+    post:
+      summary: Регистрация пользователя
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Успешная регистрация
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+  /auth/login:
+    post:
+      summary: Вход пользователя
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Успешный вход
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+  /me:
+    get:
+      summary: Получить информацию о пользователе
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Информация о пользователе
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+  /wallet:
+    get:
+      summary: Получить кошелек и транзакции
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Кошелек и транзакции
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WalletResponse'
+  /wallet/deposit:
+    post:
+      summary: Пополнить кошелек
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount:
+                  type: number
+      responses:
+        '200':
+          description: Кошелек обновлен
+  /wallet/withdraw:
+    post:
+      summary: Вывести средства
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount:
+                  type: number
+      responses:
+        '200':
+          description: Кошелек обновлен
+  /draws:
+    get:
+      summary: Получить список тиражей
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Список тиражей
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DrawsResponse'
+  /draws/admin/create:
+    post:
+      summary: Создать тираж (админ)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Draw'
+      responses:
+        '201':
+          description: Тираж создан
+  /my/tickets:
+    get:
+      summary: Получить свои билеты
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Список билетов
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TicketsResponse'
+  /notifications:
+    get:
+      summary: Получить уведомления
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Список уведомлений
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationsResponse'
+  /admin/settings:
+    get:
+      summary: Получить настройки (админ)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Настройки
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SettingsResponse'
+    put:
+      summary: Обновить настройки (админ)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SettingsUpdateRequest'
+      responses:
+        '200':
+          description: Настройки обновлены
+  /admin/reports:
+    get:
+      summary: Получить отчет (админ)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Отчет
+  /admin/reports/pdf:
+    get:
+      summary: Скачать PDF-отчет (админ)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: PDF-файл
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    RegisterRequest:
+      type: object
+      required: [email, password, name]
+      properties:
+        email: { type: string }
+        password: { type: string }
+        name: { type: string }
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string }
+        password: { type: string }
+    AuthResponse:
+      type: object
+      properties:
+        token: { type: string }
+        user:
+          $ref: '#/components/schemas/User'
+    UserResponse:
+      type: object
+      properties:
+        user:
+          $ref: '#/components/schemas/User'
+    User:
+      type: object
+      properties:
+        id: { type: string }
+        email: { type: string }
+        name: { type: string }
+        role: { type: string }
+        createdAt: { type: string }
+    WalletResponse:
+      type: object
+      properties:
+        wallet:
+          $ref: '#/components/schemas/Wallet'
+        transactions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Transaction'
+    Wallet:
+      type: object
+      properties:
+        balance: { type: number }
+        updatedAt: { type: string }
+    Transaction:
+      type: object
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        type: { type: string }
+        amount: { type: number }
+        balanceAfter: { type: number }
+        meta: { type: object }
+        createdAt: { type: string }
+    DrawsResponse:
+      type: object
+      properties:
+        draws:
+          type: array
+          items:
+            $ref: '#/components/schemas/Draw'
+    Draw:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        drawAt: { type: string }
+        ticketPrice: { type: number }
+        ticketNumbersCount: { type: integer }
+        maxNumber: { type: integer }
+        numbersCount: { type: integer }
+        status: { type: string }
+        winningNumbers:
+          type: array
+          items: { type: integer }
+        createdAt: { type: string }
+        startedAt: { type: string }
+        finishedAt: { type: string }
+    TicketsResponse:
+      type: object
+      properties:
+        tickets:
+          type: array
+          items:
+            $ref: '#/components/schemas/TicketWithDraw'
+    TicketWithDraw:
+      allOf:
+        - $ref: '#/components/schemas/Ticket'
+        - type: object
+          properties:
+            draw:
+              $ref: '#/components/schemas/Draw'
+    Ticket:
+      type: object
+      properties:
+        id: { type: string }
+        serialNumber: { type: integer }
+        userId: { type: string }
+        drawId: { type: string }
+        numbers:
+          type: array
+          items: { type: integer }
+        status: { type: string }
+        winAmount: { type: number }
+        createdAt: { type: string }
+        executedAt: { type: string }
+    NotificationsResponse:
+      type: object
+      properties:
+        notifications:
+          type: array
+          items:
+            $ref: '#/components/schemas/Notification'
+    Notification:
+      type: object
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        type: { type: string }
+        message: { type: string }
+        createdAt: { type: string }
+    SettingsResponse:
+      type: object
+      properties:
+        settings:
+          $ref: '#/components/schemas/Settings'
+    Settings:
+      type: object
+      properties:
+        lottoDrawnNumbersCount: { type: integer }
+        lottoBarrelsCount: { type: integer }
+        lottoTicketNumbersCount: { type: integer }
+        standardDrawTicketPrice: { type: number }
+        prizeBig: { type: number }
+        prizeMedium: { type: number }
+        prizeSmall: { type: number }
+        notificationsRetentionDays: { type: integer }
+        auditRetentionDays: { type: integer }
+        retentionJobIntervalMin: { type: integer }
+        standardDrawIntervalMin: { type: integer }
+        standardDrawFutureCount: { type: integer }
+    SettingsUpdateRequest:
+      type: object
+      properties:
+        lottoDrawnNumbersCount: { type: integer }
+        lottoBarrelsCount: { type: integer }
+        lottoTicketNumbersCount: { type: integer }
+        standardDrawTicketPrice: { type: number }
+        prizeBig: { type: number }
+        prizeMedium: { type: number }
+        prizeSmall: { type: number }
+        notificationsRetentionDays: { type: integer }
+        auditRetentionDays: { type: integer }
+        retentionJobIntervalMin: { type: integer }
+        standardDrawIntervalMin: { type: integer }
+        standardDrawFutureCount: { type: integer }
